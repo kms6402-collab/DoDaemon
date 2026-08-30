@@ -63,7 +63,7 @@ var navOrder = []navEntry{
 }
 
 // navWidgets groups the live pieces of one sidebar service row. dot is a
-// Label rendering a single "●" glyph rather than a fixed-size Composite —
+// Label rendering a single "■" glyph rather than a fixed-size Composite —
 // an empty Composite's MinSize isn't reliably honored by walk's HBox
 // layout (it can collapse to zero width), whereas a Label always sizes
 // itself from its text content.
@@ -100,9 +100,12 @@ type Window struct {
 	level    string // "all" | "info" | "error"
 
 	titleLbl, metaLbl, statusBadge         *walk.Label
+	statusBadgeBox                         *walk.Composite
 	kpiActive, kpiCompleted, kpiThroughput *walk.Label
 	kpiErrors                              *walk.Label
-	btnRestart, btnStop                    *walk.PushButton
+	btnRestart                             *walk.PushButton
+	btnStopBox                             *walk.Composite
+	btnStopLbl                             *walk.Label
 	filterAll, filterInfo, filterErr       *walk.PushButton
 	autoscroll                             *walk.CheckBox
 	logTableView                           *walk.TableView
@@ -156,7 +159,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 			Background: SolidColorBrush{Color: colorSidebarBG},
 			Layout:     HBox{Margins: Margins{Left: 8, Top: 7, Right: 8, Bottom: 7}, Spacing: 6},
 			Children: []Widget{
-				Label{AssignTo: &nw.dot, Text: "●", TextColor: colorFaint, Font: Font{PointSize: 9}},
+				Label{AssignTo: &nw.dot, Text: "■", TextColor: colorFaint, Font: Font{PointSize: 9}},
 				Composite{
 					Layout: VBox{MarginsZero: true, SpacingZero: true},
 					Children: []Widget{
@@ -257,13 +260,32 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										},
 									},
 									HSpacer{},
-									Label{AssignTo: &w.statusBadge, Text: "확인 중", Font: Font{PointSize: 8, Bold: true}, TextColor: colorDim},
+									Composite{
+										AssignTo:   &w.statusBadgeBox,
+										Background: SolidColorBrush{Color: colorSidebarBG},
+										Layout:     HBox{Margins: Margins{Left: 10, Top: 4, Right: 10, Bottom: 4}, MarginsZero: false},
+										Children: []Widget{
+											Label{AssignTo: &w.statusBadge, Text: "확인 중", Font: Font{PointSize: 8, Bold: true}, TextColor: colorDim},
+										},
+									},
 									PushButton{AssignTo: &w.btnRestart, Text: "재시작", OnClicked: w.onRestart},
-									PushButton{AssignTo: &w.btnStop, Text: "정지", Background: SolidColorBrush{Color: colorStopBtn}, OnClicked: w.onStop},
+									// A real PushButton ignores a plain Background brush under
+									// Win32 visual styles (would need BS_OWNERDRAW +
+									// WM_DRAWITEM to fill solid navy), so 정지 is a clickable
+									// colored Composite+Label instead — the same proven
+									// pattern as the sidebar nav rows and statusBadgeBox.
+									Composite{
+										AssignTo:   &w.btnStopBox,
+										Background: SolidColorBrush{Color: colorStopBtn},
+										Layout:     HBox{Margins: Margins{Left: 14, Top: 5, Right: 14, Bottom: 5}},
+										Children: []Widget{
+											Label{AssignTo: &w.btnStopLbl, Text: "정지", TextColor: walk.RGB(0xff, 0xff, 0xff), Font: Font{PointSize: 9}},
+										},
+									},
 								},
 							},
 							Composite{
-								Layout: HBox{MarginsZero: true},
+								Layout: HBox{MarginsZero: true, Spacing: 28},
 								Children: []Widget{
 									kpiTile(&w.kpiActive, "활성 전송"),
 									kpiTile(&w.kpiCompleted, "완료"),
@@ -364,6 +386,8 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		nw.nameLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.selectService(key) })
 		nw.protoLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.selectService(key) })
 	}
+	w.btnStopBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onStop() })
+	w.btnStopLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onStop() })
 
 	ch, unsub := bus.Subscribe(256)
 	w.unsubscribe = unsub
@@ -641,10 +665,16 @@ func (w *Window) refreshDetail() {
 	w.metaLbl.SetText(meta)
 	if enabled {
 		w.statusBadge.SetText("실행 중")
-		w.statusBadge.SetTextColor(colorOK)
+		w.statusBadge.SetTextColor(colorAccent)
+		if brush, err := walk.NewSolidColorBrush(colorAccentDim); err == nil {
+			w.statusBadgeBox.SetBackground(brush)
+		}
 	} else {
 		w.statusBadge.SetText("중지됨")
-		w.statusBadge.SetTextColor(colorFaint)
+		w.statusBadge.SetTextColor(colorDim)
+		if brush, err := walk.NewSolidColorBrush(colorSidebarBG); err == nil {
+			w.statusBadgeBox.SetBackground(brush)
+		}
 	}
 
 	w.refreshDirPanel()

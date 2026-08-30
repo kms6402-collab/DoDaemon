@@ -93,8 +93,12 @@
             <button type="button" class="btn" data-browse="tftp_root_dir">폴더 찾기</button>
           </div>
         </div>
-        <div class="switch-row"><div class="label">다운로드(RRQ) 허용</div><label class="switch"><input type="checkbox" id="tftp_allow_read"><span class="slider"></span></label></div>
-        <div class="switch-row"><div class="label">업로드(WRQ) 허용</div><label class="switch"><input type="checkbox" id="tftp_allow_write"><span class="slider"></span></label></div>
+        <div class="section-title">권한</div>
+        <div class="radio-group" id="tftp-perm-group">
+          <label><input type="radio" name="tftp_perm_mode" value="rw"> 읽기·쓰기 허용</label>
+          <label><input type="radio" name="tftp_perm_mode" value="ro"> 읽기 전용</label>
+          <label><input type="radio" name="tftp_perm_mode" value="wo"> 쓰기 전용</label>
+        </div>
         <div class="field" style="margin-top:10px;"><label>최대 블록 크기 (8~65464)</label><input id="tftp_max_blksize" type="number" min="8" max="65464"></div>
       </div>
 

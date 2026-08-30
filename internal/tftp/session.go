@@ -46,12 +46,41 @@ func (s *Server) negotiateOptions(req *request, fileSizeForRRQ int64) negotiated
 			n.oackKV = append(n.oackKV, "timeout", strconv.Itoa(t))
 		}
 	}
-	if _, ok := req.options["tsize"]; ok {
+	if v, ok := req.options["tsize"]; ok {
 		size := fileSizeForRRQ
+		// For WRQ, fileSizeForRRQ is 0 (the server doesn't know the size in
+		// advance) and the client is the one declaring its upload size via
+		// tsize (RFC 2349) — echo that back rather than always OACKing 0,
+		// so both sides (and our own progress tracking) agree on the total.
+		if size == 0 {
+			if parsed, err := strconv.ParseInt(v, 10, 64); err == nil && parsed >= 0 {
+				size = parsed
+			}
+		}
 		n.tsize = &size
 		n.oackKV = append(n.oackKV, "tsize", strconv.FormatInt(size, 10))
 	}
 	return n
+}
+
+// progressInterval throttles how often "진행" events are published during a
+// transfer — frequent enough for the active-session UI to feel live,
+// infrequent enough not to flood the event bus on fast local transfers.
+const progressInterval = 200 * time.Millisecond
+
+// publishProgress emits a throttled transfer-progress event; *last tracks
+// the previous publish time across calls within one session's loop. total
+// of 0 means "unknown" (an in-progress TFTP upload with no tsize option) —
+// subscribers show a byte counter instead of a percentage in that case.
+func (s *Server) publishProgress(remote, file string, done, total int64, last *time.Time) {
+	now := time.Now()
+	if now.Sub(*last) < progressInterval {
+		return
+	}
+	*last = now
+	s.publish("transfer", remote, "TFTP 전송 진행", map[string]any{
+		"file": file, "bytes_done": done, "bytes_total": total, "progress": true,
+	})
 }
 
 func (s *Server) handleSession(ctx context.Context, req *request, remote *net.UDPAddr) {
@@ -109,12 +138,14 @@ func (s *Server) handleRRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 
 	if len(n.oackKV) > 0 {
 		if !s.sendAndWaitACK(conn, encodeOACK(n.oackKV), 0, n.timeout) {
-			s.publish("error", remote.String(), "RRQ option negotiation timed out", nil)
+			s.publish("error", remote.String(), "RRQ option negotiation timed out", map[string]any{"file": req.filename})
 			return
 		}
 	}
 
 	var block uint16 = 1
+	var bytesSent int64
+	lastProgress := time.Now()
 	reader := io.Reader(f)
 	buf := make([]byte, n.blksize)
 
@@ -141,6 +172,8 @@ func (s *Server) handleRRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 			s.publish("error", remote.String(), "RRQ transfer aborted (no ACK)", map[string]any{"file": req.filename, "block": block})
 			return
 		}
+		bytesSent += int64(nRead)
+		s.publishProgress(remote.String(), req.filename, bytesSent, fileSize, &lastProgress)
 
 		if nRead < n.blksize {
 			s.publish("transfer", remote.String(), "TFTP download complete", map[string]any{"file": req.filename})
@@ -158,6 +191,10 @@ func (s *Server) handleWRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 	}
 
 	n := s.negotiateOptions(req, 0)
+	var totalSize int64
+	if n.tsize != nil {
+		totalSize = *n.tsize
+	}
 
 	f, err := os.Create(path)
 	if err != nil {
@@ -169,6 +206,8 @@ func (s *Server) handleWRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 	s.publish("transfer", remote.String(), "TFTP upload started", map[string]any{"file": req.filename, "mode": mode, "blksize": n.blksize})
 
 	var expected uint16 = 1
+	var bytesRecv int64
+	lastProgress := time.Now()
 	first := true
 	var carryCR bool
 
@@ -198,7 +237,7 @@ func (s *Server) handleWRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 				conn.SetReadDeadline(time.Now().Add(n.timeout))
 				nRead, err = conn.Read(buf)
 				if err != nil {
-					s.publish("error", remote.String(), "WRQ timed out waiting for first DATA", nil)
+					s.publish("error", remote.String(), "WRQ timed out waiting for first DATA", map[string]any{"file": req.filename})
 					return
 				}
 			} else {
@@ -233,6 +272,8 @@ func (s *Server) handleWRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 			return
 		}
 		ack(block)
+		bytesRecv += int64(len(data))
+		s.publishProgress(remote.String(), req.filename, bytesRecv, totalSize, &lastProgress)
 
 		if len(data) < n.blksize {
 			s.publish("transfer", remote.String(), "TFTP upload complete", map[string]any{"file": req.filename})

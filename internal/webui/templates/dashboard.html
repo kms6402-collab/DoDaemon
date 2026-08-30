@@ -8,11 +8,15 @@
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
+<div class="titlebar">
+  <span class="win-dot"></span><span class="win-dot"></span><span class="win-dot"></span>
+  <span class="titlebar-brand">DoDaeMon <span class="ver">v{{.Version}}</span></span>
+  <span class="titlebar-tag">TFTP · FTP · SYSLOG · WEB 서버 콘솔</span>
+  <span class="titlebar-right"><span id="tb-ip">-</span><span class="sep">|</span><span id="tb-clock">-</span></span>
+</div>
+
 <div class="shell">
   <aside class="sidebar">
-    <div class="brand"><span class="dot"></span> DoDaeMon</div>
-    <div class="brand-tagline">TFTP · FTP · SYSLOG 서버 콘솔</div>
-
     <div class="nav-label">서비스</div>
     <nav id="service-nav">
       {{range .Services}}
@@ -22,9 +26,27 @@
           <div class="name">{{.Name}}</div>
           <div class="proto">{{.Protocol}}</div>
         </div>
+        <span class="rate" id="rate-{{.Key}}">—</span>
       </div>
       {{end}}
     </nav>
+
+    <div class="sidebar-section" id="dir-section">
+      <div class="nav-label">디렉터리</div>
+      <div class="dir-path" id="dir-path">-</div>
+      <div class="dir-actions">
+        <button type="button" class="btn small" id="dir-change">변경</button>
+        <button type="button" class="btn small" id="dir-open">열기</button>
+      </div>
+      <div class="dir-listing" id="dir-listing" hidden></div>
+    </div>
+
+    <div class="sidebar-section" id="perm-section" hidden>
+      <div class="nav-label">권한</div>
+      <label class="radio-row"><input type="radio" name="perm-mode" value="rw"> 읽기·쓰기 허용</label>
+      <label class="radio-row"><input type="radio" name="perm-mode" value="ro"> 읽기 전용</label>
+      <label class="radio-row"><input type="radio" name="perm-mode" value="wo"> 쓰기 전용</label>
+    </div>
 
     <div class="sidebar-bottom">
       <a class="btn small" href="/settings">⚙ 설정</a>
@@ -40,27 +62,32 @@
         <div class="detail-meta" id="detail-meta">-</div>
       </div>
       <div class="detail-actions">
-        <span class="badge off" id="detail-status"><span class="dot"></span>확인 중</span>
+        <span id="detail-status">확인 중</span>
+        <button type="button" class="btn" id="btn-restart">재시작</button>
+        <button type="button" class="btn primary" id="btn-stop">정지</button>
       </div>
     </div>
 
     <div class="kpi-row">
-      <div class="kpi"><div class="kpi-value" id="kpi-active">0</div><div class="kpi-label">활성 연결</div></div>
-      <div class="kpi"><div class="kpi-value" id="kpi-total">0</div><div class="kpi-label">총 연결 (세션 중)</div></div>
+      <div class="kpi"><div class="kpi-value" id="kpi-active">0</div><div class="kpi-label">활성 전송</div></div>
+      <div class="kpi"><div class="kpi-value" id="kpi-total">0</div><div class="kpi-label">완료</div></div>
+      <div class="kpi"><div class="kpi-value" id="kpi-throughput">0.0</div><div class="kpi-label">처리량 (MB/s)</div></div>
       <div class="kpi"><div class="kpi-value" id="kpi-errors">0</div><div class="kpi-label">오류</div></div>
-      <div class="kpi"><div class="kpi-value" id="kpi-lastactivity">-</div><div class="kpi-label">마지막 활동</div></div>
     </div>
 
-    <div class="panel">
+    <div class="panel transfers">
       <div class="panel-header">
-        <span class="title">활성 세션</span>
-        <span class="badge on" id="active-count-badge"><span class="dot"></span>0개</span>
+        <span class="title">진행 중인 전송</span>
+        <span class="count" id="active-count">0 세션</span>
+        <div class="spacer"></div>
+        <button type="button" class="btn small">전송 로그 내보내기</button>
+        <button type="button" class="btn small">모두 중단</button>
       </div>
       <div style="overflow-x:auto;">
         <table class="data-table" id="active-table">
-          <thead><tr><th>클라이언트</th><th>방향/종류</th><th>파일/내용</th><th>시작 시각</th></tr></thead>
+          <thead><tr><th>파일</th><th>클라이언트</th><th>방향</th><th>진행률</th><th>속도</th><th>남은 시간</th></tr></thead>
           <tbody id="active-tbody">
-            <tr><td colspan="4" class="empty">활성 세션이 없습니다.</td></tr>
+            <tr><td colspan="6" class="empty">활성 세션이 없습니다.</td></tr>
           </tbody>
         </table>
       </div>
@@ -70,12 +97,12 @@
       <div class="panel-header">
         <span class="title">이벤트 로그</span>
         <div class="filter-pills" id="log-filters">
-          <button class="filter-pill active" data-level="all">전체</button>
-          <button class="filter-pill" data-level="info">INFO</button>
-          <button class="filter-pill" data-level="error">ERROR</button>
+          <button class="filter-pill level-info active" data-level="info">INFO</button>
+          <button class="filter-pill level-warn active" data-level="warn">WARN</button>
+          <button class="filter-pill level-error active" data-level="error">ERROR</button>
         </div>
-        <label class="toggle-mini"><input type="checkbox" id="autoscroll" checked> 자동 스크롤</label>
-        <span class="badge on" id="conn-badge"><span class="dot" id="conn-dot"></span>연결됨</span>
+        <div class="spacer"></div>
+        <button type="button" class="btn small ghost" id="autoscroll-btn">자동 스크롤 켜짐</button>
       </div>
       <div class="log-viewer" id="log-viewer">
         <div class="empty">아직 수신된 이벤트가 없습니다.</div>
@@ -83,6 +110,28 @@
     </div>
   </main>
 </div>
+
+<div class="footerbar">
+  <span id="fb-status">-</span>
+  <span class="footerbar-right">RX <span id="fb-rx">0 GB</span>&nbsp;&nbsp;TX <span id="fb-tx">0 GB</span>&nbsp;&nbsp;v{{.Version}}</span>
+</div>
+
+<div class="modal-overlay" id="browse-modal-overlay">
+  <div class="modal wide">
+    <h3>폴더 찾기</h3>
+    <div class="drive-chips" id="browse-drives"></div>
+    <div class="browse-path" id="browse-current-path">-</div>
+    <div class="browse-list" id="browse-list"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="browse-up">상위 폴더</button>
+      <button type="button" class="btn" id="browse-cancel">취소</button>
+      <button type="button" class="btn primary" id="browse-select">이 폴더 선택</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>window.__DODAEMON__ = {{.BootstrapJS}};</script>
 <script src="/static/app.js"></script>
 </body>

@@ -3,6 +3,7 @@ package ftp
 import (
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/spf13/afero"
@@ -11,6 +12,11 @@ import (
 	"github.com/kms6402/dodaemon/internal/eventbus"
 	"github.com/kms6402/dodaemon/internal/security"
 )
+
+// progressInterval throttles how often "진행" events are published during a
+// transfer, mirroring internal/tftp/session.go's publishProgress so both
+// protocols' active-session UI updates at the same cadence.
+const progressInterval = 200 * time.Millisecond
 
 // permissionFs wraps an afero.Fs rooted at a user's home directory and
 // enforces the user's 3CDaemon-style permission characters on every
@@ -42,23 +48,72 @@ func (f *permissionFs) publish(kind eventbus.Kind, msg string) {
 	f.bus.Publish(eventbus.Event{Source: "ftp", Kind: kind, RemoteAddr: f.remoteAddr, Message: msg})
 }
 
-func (f *permissionFs) track(file afero.File, err error, direction, name string) (afero.File, error) {
+// track wraps file for progress reporting. total is the known size in
+// bytes for a GET (the caller already Stat'd it) or 0 for a PUT, where
+// ftpserverlib never tells the driver how many bytes the client intends to
+// send — subscribers show a byte counter instead of a percentage when 0.
+func (f *permissionFs) track(file afero.File, err error, direction, name string, total int64) (afero.File, error) {
 	if err != nil {
 		return file, err
 	}
 	f.publish(eventbus.KindTransfer, fmt.Sprintf("FTP %s 시작: %s", direction, name))
-	return &trackedFile{File: file, fs: f, direction: direction, name: name}, nil
+	tf := &trackedFile{File: file, fs: f, direction: direction, name: name, total: total}
+	tf.lastProgress.Store(time.Now())
+	return tf, nil
 }
 
 // trackedFile publishes a "complete" event exactly once when the FTP
 // client closes the data connection, however that happens (clean finish,
-// ABOR, or a dropped connection — ftpserverlib always calls Close()).
+// ABOR, or a dropped connection — ftpserverlib always calls Close()), and
+// throttled "progress" events as bytes flow through Read/Write so the
+// active-session UI (web and native) can show live transfer progress.
 type trackedFile struct {
 	afero.File
 	fs        *permissionFs
 	direction string
 	name      string
+	total     int64
+	done      int64
 	closed    bool
+
+	lastProgress atomic.Value // time.Time
+}
+
+func (t *trackedFile) publishProgress() {
+	now := time.Now()
+	last := t.lastProgress.Load().(time.Time)
+	if now.Sub(last) < progressInterval {
+		return
+	}
+	t.lastProgress.Store(now)
+	done := atomic.LoadInt64(&t.done)
+	t.fs.bus.Publish(eventbus.Event{
+		Source: "ftp", Kind: eventbus.KindTransfer, RemoteAddr: t.fs.remoteAddr,
+		Message: fmt.Sprintf("FTP %s 진행: %s", t.direction, t.name),
+		Fields:  map[string]any{"file": t.name, "bytes_done": done, "bytes_total": t.total, "progress": true},
+	})
+}
+
+func (t *trackedFile) Read(p []byte) (int, error) {
+	n, err := t.File.Read(p)
+	if n > 0 {
+		atomic.AddInt64(&t.done, int64(n))
+		if t.fs.bus != nil {
+			t.publishProgress()
+		}
+	}
+	return n, err
+}
+
+func (t *trackedFile) Write(p []byte) (int, error) {
+	n, err := t.File.Write(p)
+	if n > 0 {
+		atomic.AddInt64(&t.done, int64(n))
+		if t.fs.bus != nil {
+			t.publishProgress()
+		}
+	}
+	return n, err
 }
 
 func (t *trackedFile) Close() error {
@@ -92,7 +147,7 @@ func (f *permissionFs) Create(name string) (afero.File, error) {
 		return nil, err
 	}
 	file, err := f.inner.Create(name)
-	return f.track(file, err, "PUT", name)
+	return f.track(file, err, "PUT", name, 0) // upload size unknown until EOF
 }
 
 func (f *permissionFs) Mkdir(name string, perm os.FileMode) error {
@@ -120,8 +175,10 @@ func (f *permissionFs) Open(name string) (afero.File, error) {
 		return nil, err
 	}
 	isDir := false
+	var size int64
 	if fi, err := f.inner.Stat(name); err == nil {
 		isDir = fi.IsDir()
+		size = fi.Size()
 	}
 	if isDir {
 		if err := f.require(auth.PermList); err != nil {
@@ -133,7 +190,7 @@ func (f *permissionFs) Open(name string) (afero.File, error) {
 		return nil, err
 	}
 	file, err := f.inner.Open(name)
-	return f.track(file, err, "GET", name)
+	return f.track(file, err, "GET", name, size)
 }
 
 func (f *permissionFs) OpenFile(name string, flag int, perm os.FileMode) (afero.File, error) {
@@ -157,8 +214,14 @@ func (f *permissionFs) OpenFile(name string, flag int, perm os.FileMode) (afero.
 			return nil, err
 		}
 	}
+	var size int64
+	if direction == "GET" {
+		if fi, err := f.inner.Stat(name); err == nil {
+			size = fi.Size()
+		}
+	}
 	file, err := f.inner.OpenFile(name, flag, perm)
-	return f.track(file, err, direction, name)
+	return f.track(file, err, direction, name, size)
 }
 
 func (f *permissionFs) Remove(name string) error {

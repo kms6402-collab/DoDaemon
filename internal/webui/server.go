@@ -161,6 +161,8 @@ type serviceInfo struct {
 	Protocol string `json:"protocol"`
 	Listen   string `json:"listen"`
 	Meta     string `json:"meta"`
+	Dir      string `json:"dir,omitempty"`       // root/home/log directory, for the sidebar quick-editor; empty for webui
+	PermMode string `json:"perm_mode,omitempty"` // "rw"|"ro"|"wo", TFTP only
 }
 
 func (s *Server) buildServices() []serviceInfo {
@@ -186,21 +188,38 @@ func (s *Server) buildServices() []serviceInfo {
 		syslogDetail = "tcp " + cfg.Syslog.TCPListen
 	}
 
+	permMode := "ro"
+	switch {
+	case cfg.TFTP.AllowRead && cfg.TFTP.AllowWrite:
+		permMode = "rw"
+	case cfg.TFTP.AllowWrite:
+		permMode = "wo"
+	}
+
+	ftpDir := cfg.FTP.AnonymousHomeDir
+	if ftpDir == "" && len(cfg.FTP.Users) > 0 {
+		ftpDir = cfg.FTP.Users[0].HomeDir
+	}
+
 	return []serviceInfo{
 		{
 			Key: "tftp", Name: "TFTP 서버", Enabled: cfg.TFTP.Enabled,
 			Protocol: "UDP " + tftpPort, Listen: cfg.TFTP.Listen,
-			Meta: fmt.Sprintf("udp/%s · 루트 %s · %s", tftpPort, cfg.TFTP.RootDir, writeState),
+			Meta:     fmt.Sprintf("udp/%s · 루트 %s · %s", tftpPort, cfg.TFTP.RootDir, writeState),
+			Dir:      cfg.TFTP.RootDir,
+			PermMode: permMode,
 		},
 		{
 			Key: "ftp", Name: "FTP 서버", Enabled: cfg.FTP.Enabled,
 			Protocol: "TCP " + ftpPort, Listen: cfg.FTP.Listen,
 			Meta: fmt.Sprintf("tcp/%s · 패시브 %d-%d · 계정 %d개", ftpPort, cfg.FTP.PassivePortRange[0], cfg.FTP.PassivePortRange[1], len(cfg.FTP.Users)),
+			Dir:  ftpDir,
 		},
 		{
 			Key: "syslog", Name: "Syslog 서버", Enabled: cfg.Syslog.Enabled,
 			Protocol: syslogProto, Listen: syslogAddr,
 			Meta: fmt.Sprintf("%s · 보관 %d일", syslogDetail, cfg.Syslog.Rotate.MaxAgeDay),
+			Dir:  cfg.Syslog.LogDir,
 		},
 		{
 			Key: "webui", Name: "Web", Enabled: cfg.WebUI.Enabled,
@@ -221,8 +240,14 @@ func splitAddr(addr string) (host, port string) {
 	return h, p
 }
 
+// Version is set once at startup by cmd/dodaemon (the same -X main.version
+// ldflag value) so the dashboard's title bar and footer can display it
+// without the webui package importing cmd/dodaemon.
+var Version = "dev"
+
 type dashboardData struct {
 	Hostname     string
+	Version      string
 	Services     []serviceInfo
 	RecentEvents []eventbus.Event
 	BootstrapJS  template.JS
@@ -241,10 +266,23 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	services := s.buildServices()
+	// serverAddr is shown in the title bar as "what address you reached this
+	// console through" — the configured listen host if it's a specific
+	// address, otherwise the Host header the browser actually used (0.0.0.0
+	// isn't a useful thing to show the operator).
+	serverAddr, _ := splitAddr(cfg.WebUI.Listen)
+	if serverAddr == "" || serverAddr == "0.0.0.0" {
+		if h, _, err := net.SplitHostPort(r.Host); err == nil {
+			serverAddr = h
+		} else {
+			serverAddr = r.Host
+		}
+	}
 	// json.Marshal HTML-escapes '<', '>' and '&' by default, which is
 	// exactly what makes this safe to splice into a <script> block below.
 	bootstrap, err := json.Marshal(map[string]any{
 		"hostname":      cfg.Server.Hostname,
+		"server_addr":   serverAddr,
 		"services":      services,
 		"recent_events": recent,
 	})
@@ -255,6 +293,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	data := dashboardData{
 		Hostname:     cfg.Server.Hostname,
+		Version:      Version,
 		Services:     services,
 		RecentEvents: recent,
 		BootstrapJS:  template.JS(bootstrap),

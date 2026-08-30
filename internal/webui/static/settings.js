@@ -204,6 +204,16 @@
     return $(id).value.split("\n").map((s) => s.trim()).filter((s) => s !== "");
   }
 
+  function setTftpPermMode(allowRead, allowWrite) {
+    const mode = allowRead && allowWrite ? "rw" : allowWrite ? "wo" : "ro";
+    document.querySelectorAll('input[name="tftp_perm_mode"]').forEach((r) => (r.checked = r.value === mode));
+  }
+  function getTftpPermMode() {
+    const checked = document.querySelector('input[name="tftp_perm_mode"]:checked');
+    const mode = checked ? checked.value : "ro";
+    return { allowRead: mode === "rw" || mode === "ro", allowWrite: mode === "rw" || mode === "wo" };
+  }
+
   function load() {
     fetch("/api/settings")
       .then((r) => r.json())
@@ -232,8 +242,7 @@
         setField("tftp_enabled", dto.tftp_enabled);
         setField("tftp_listen", dto.tftp_listen);
         setField("tftp_root_dir", dto.tftp_root_dir);
-        setField("tftp_allow_read", dto.tftp_allow_read);
-        setField("tftp_allow_write", dto.tftp_allow_write);
+        setTftpPermMode(dto.tftp_allow_read, dto.tftp_allow_write);
         setField("tftp_max_blksize", dto.tftp_max_blksize);
 
         setField("syslog_enabled", dto.syslog_enabled);
@@ -277,8 +286,8 @@
       tftp_enabled: getField("tftp_enabled"),
       tftp_listen: getField("tftp_listen"),
       tftp_root_dir: getField("tftp_root_dir"),
-      tftp_allow_read: getField("tftp_allow_read"),
-      tftp_allow_write: getField("tftp_allow_write"),
+      tftp_allow_read: getTftpPermMode().allowRead,
+      tftp_allow_write: getTftpPermMode().allowWrite,
       tftp_max_blksize: getInt("tftp_max_blksize"),
 
       syslog_enabled: getField("syslog_enabled"),

@@ -3,18 +3,21 @@
 package nativeui
 
 import (
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/kms6402/dodaemon/internal/eventbus"
 )
 
+var completePattern = regexp.MustCompile(`complete|완료`)
+
 // svcStats mirrors the per-source running counters kept by the web
 // dashboard's static/app.js (`stats[source]`) so both UIs show the same
-// numbers for a given service: total connections seen and errors seen
-// this session, plus the timestamp of the last event.
+// numbers for a given service: completed transfers and errors seen this
+// session, plus the timestamp of the last event.
 type svcStats struct {
-	total        int
+	completed    int
 	errors       int
 	lastActivity time.Time
 }
@@ -40,11 +43,11 @@ func (t *statsTracker) record(ev eventbus.Event) {
 		t.bySrc[ev.Source] = s
 	}
 	s.lastActivity = ev.Time
-	if ev.Kind == eventbus.KindConnect {
-		s.total++
-	}
 	if ev.Kind == eventbus.KindError {
 		s.errors++
+	}
+	if ev.Kind == eventbus.KindTransfer && completePattern.MatchString(ev.Message) {
+		s.completed++
 	}
 }
 

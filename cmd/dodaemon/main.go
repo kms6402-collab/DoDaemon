@@ -139,6 +139,7 @@ func newRunFunc(absConfigPath string, bus *eventbus.Bus, onReload func(*config.C
 			onReload(cfg)
 		}
 		webui.ConfigPath = absConfigPath
+		webui.Version = version
 
 		ftpACL, err := security.NewACL(cfg.FTP.IPAllowlist, nil)
 		if err != nil {

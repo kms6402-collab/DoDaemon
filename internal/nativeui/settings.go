@@ -96,7 +96,8 @@ func (w *Window) openSettings() {
 	var ftpUserList *walk.ListBox
 	var ftpAllowlist *walk.TextEdit
 
-	var tftpEnabled, tftpAllowRead, tftpAllowWrite *walk.CheckBox
+	var tftpEnabled *walk.CheckBox
+	var tftpPermRW, tftpPermRO, tftpPermWO *walk.RadioButton
 	var tftpListen, tftpRootDir *walk.LineEdit
 	var tftpMaxBlksize *walk.NumberEdit
 
@@ -123,7 +124,7 @@ func (w *Window) openSettings() {
 	fieldFont := Font{PointSize: 9}
 	hintFont := Font{PointSize: 8}
 
-	Dialog{
+	dialog := Dialog{
 		AssignTo:      &dlg,
 		Title:         "DoDaemon 설정",
 		Icon:          w.icon,
@@ -228,8 +229,10 @@ func (w *Window) openSettings() {
 							LineEdit{AssignTo: &tftpListen, Text: cfg.TFTP.Listen},
 							Label{Text: "루트 폴더"},
 							pathField(&tftpRootDir, cfg.TFTP.RootDir, &dlg),
-							CheckBox{AssignTo: &tftpAllowRead, Text: "다운로드(RRQ) 허용", Checked: cfg.TFTP.AllowRead},
-							CheckBox{AssignTo: &tftpAllowWrite, Text: "업로드(WRQ) 허용", Checked: cfg.TFTP.AllowWrite},
+							Label{Text: "권한", Font: Font{PointSize: 9, Bold: true}},
+							RadioButton{AssignTo: &tftpPermRW, Text: "읽기·쓰기 허용"},
+							RadioButton{AssignTo: &tftpPermRO, Text: "읽기 전용"},
+							RadioButton{AssignTo: &tftpPermWO, Text: "쓰기 전용"},
 							Label{Text: "최대 블록 크기 (8~65464)"},
 							NumberEdit{AssignTo: &tftpMaxBlksize, Value: float64(cfg.TFTP.MaxBlksize), MinValue: 8, MaxValue: 65464, Decimals: 0},
 							VSpacer{},
@@ -310,8 +313,8 @@ func (w *Window) openSettings() {
 						newCfg.TFTP.Enabled = tftpEnabled.Checked()
 						newCfg.TFTP.Listen = tftpListen.Text()
 						newCfg.TFTP.RootDir = tftpRootDir.Text()
-						newCfg.TFTP.AllowRead = tftpAllowRead.Checked()
-						newCfg.TFTP.AllowWrite = tftpAllowWrite.Checked()
+						newCfg.TFTP.AllowRead = tftpPermRW.Checked() || tftpPermRO.Checked()
+						newCfg.TFTP.AllowWrite = tftpPermRW.Checked() || tftpPermWO.Checked()
 						newCfg.TFTP.MaxBlksize = int(tftpMaxBlksize.Value())
 
 						newCfg.Syslog.Enabled = syslogEnabled.Checked()
@@ -358,7 +361,24 @@ func (w *Window) openSettings() {
 				},
 			},
 		},
-	}.Run(w.mw)
+	}
+
+	if err := dialog.Create(w.mw); err != nil {
+		walk.MsgBox(w.mw, "오류", err.Error(), walk.MsgBoxIconError)
+		return
+	}
+	// RadioButton has no declarative Checked field (unlike CheckBox), so the
+	// initial TFTP 권한 selection is set imperatively here, once the real
+	// *walk.RadioButton values exist post-Create.
+	switch {
+	case cfg.TFTP.AllowRead && cfg.TFTP.AllowWrite:
+		tftpPermRW.SetChecked(true)
+	case cfg.TFTP.AllowWrite:
+		tftpPermWO.SetChecked(true)
+	default:
+		tftpPermRO.SetChecked(true)
+	}
+	dlg.Run()
 }
 
 // editFTPUserDialog shows a small modal for adding or editing one FTP

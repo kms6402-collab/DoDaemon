@@ -1,12 +1,12 @@
-// Package icons procedurally draws DoDaemon's app mark: an indigo circle
-// (matching the web dashboard's accent color, docs/PLAN.md §5.6) holding a
-// small broadcast-tower glyph — a base, a mast and a beacon radiating two
-// signal arcs — reading as "a daemon serving/broadcasting network
-// protocols" (FTP/TFTP/Syslog), with a small green "online" dot echoing
-// the dashboard's status badges. Drawing it in code instead of shipping a
-// static image file keeps the whole visual identity reproducible and lets
-// both the .ico build resource (cmd/icongen) and the native window's
-// runtime taskbar icon (internal/nativeui) share one source of truth.
+// Package icons procedurally draws DoDaemon's app mark: a white
+// hub-and-spoke network glyph (a central node connected to four outer
+// nodes — instantly readable as "network/server" at any size) on a solid
+// black square, so it reads clearly as a network daemon both in the
+// taskbar and at small Explorer thumbnail sizes. Drawing it in code
+// instead of shipping a static image file keeps the whole visual identity
+// reproducible and lets both the .ico build resource (cmd/icongen) and the
+// native window's runtime taskbar icon (internal/nativeui) share one
+// source of truth.
 package icons
 
 import (
@@ -16,9 +16,8 @@ import (
 )
 
 var (
-	accent = color.RGBA{0x6d, 0x8d, 0xff, 0xff} // matches --accent in webui/static/style.css
-	white  = color.RGBA{0xff, 0xff, 0xff, 0xff}
-	online = color.RGBA{0x3e, 0xcf, 0x8e, 0xff} // matches --ok
+	bg    = color.RGBA{0x0a, 0x0a, 0x0a, 0xff} // near-black background
+	white = color.RGBA{0xff, 0xff, 0xff, 0xff}
 )
 
 // Draw renders the mark at size x size pixels.
@@ -27,25 +26,38 @@ func Draw(size int) *image.RGBA {
 	s := float64(size)
 	c := s / 2
 
-	fillCircle(img, c, c, c, accent)
+	fillRect(img, bg)
 
-	// Base, mast and beacon of a small broadcast tower.
-	baseY := c + s*0.22
-	beaconY := c - s*0.10
-	fillLine(img, c-s*0.15, baseY, c+s*0.15, baseY, s*0.06, white) // foot
-	fillLine(img, c, baseY, c, beaconY, s*0.05, white)             // mast
-	fillCircle(img, c, beaconY, s*0.075, white)                    // beacon
+	hubR := s * 0.11
+	nodeR := s * 0.075
+	lineW := s * 0.05
+	dist := s * 0.29
 
-	// Two concentric signal arcs fanning upward out of the beacon.
-	startAngle, endAngle := -140*math.Pi/180, -40*math.Pi/180
-	fillArcBand(img, c, beaconY, s*0.12, s*0.155, startAngle, endAngle, white)
-	fillArcBand(img, c, beaconY, s*0.19, s*0.225, startAngle, endAngle, white)
-
-	// "online" dot badges the beacon's lower-right edge.
-	dotR := s * 0.065
-	fillCircle(img, c+s*0.155, beaconY+s*0.135, dotR, online)
+	// Four outer nodes at N/E/S/W, wired back to the hub — a classic
+	// hub-and-spoke network topology glyph.
+	spokes := []struct{ dx, dy float64 }{
+		{0, -dist}, {dist, 0}, {0, dist}, {-dist, 0},
+	}
+	for _, p := range spokes {
+		fillLine(img, c, c, c+p.dx, c+p.dy, lineW, white)
+	}
+	for _, p := range spokes {
+		fillCircle(img, c+p.dx, c+p.dy, nodeR, white)
+	}
+	fillCircle(img, c, c, hubR, white)
 
 	return img
+}
+
+// fillRect paints every pixel col — used for the icon's solid background,
+// which needs no antialiasing since it's the full canvas.
+func fillRect(img *image.RGBA, col color.RGBA) {
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			img.SetRGBA(x, y, col)
+		}
+	}
 }
 
 func fillCircle(img *image.RGBA, cx, cy, r float64, col color.RGBA) {
@@ -100,41 +112,6 @@ func fillLine(img *image.RGBA, x0, y0, x1, y1, w float64, col color.RGBA) {
 			cx, cy := x0+t*dx, y0+t*dy
 			d := math.Hypot(px-cx, py-cy)
 			blendEdge(img, x, y, rad-d, col)
-		}
-	}
-}
-
-// fillArcBand draws a ring segment (like one bar of a WiFi/broadcast icon)
-// centered at (cx,cy): the band between innerR and outerR, spanning
-// [startAngle, endAngle] radians measured the way math.Atan2 does (0 =
-// +X axis, increasing toward +Y — i.e. clockwise in image space since Y
-// grows downward; straight up is -math.Pi/2). Radial edges are
-// antialiased; angular edges are a hard cutoff, which is fine at icon
-// resolutions.
-func fillArcBand(img *image.RGBA, cx, cy, innerR, outerR, startAngle, endAngle float64, col color.RGBA) {
-	x0, y0 := int(math.Floor(cx-outerR-1)), int(math.Floor(cy-outerR-1))
-	x1, y1 := int(math.Ceil(cx+outerR+1)), int(math.Ceil(cy+outerR+1))
-	bounds := img.Bounds()
-
-	for y := y0; y <= y1; y++ {
-		if y < bounds.Min.Y || y >= bounds.Max.Y {
-			continue
-		}
-		for x := x0; x <= x1; x++ {
-			if x < bounds.Min.X || x >= bounds.Max.X {
-				continue
-			}
-			dx, dy := float64(x)+0.5-cx, float64(y)+0.5-cy
-			d := math.Hypot(dx, dy)
-			if d < innerR-1 || d > outerR+1 {
-				continue
-			}
-			angle := math.Atan2(dy, dx)
-			if angle < startAngle || angle > endAngle {
-				continue
-			}
-			dist := math.Min(d-innerR, outerR-d)
-			blendEdge(img, x, y, dist, col)
 		}
 	}
 }

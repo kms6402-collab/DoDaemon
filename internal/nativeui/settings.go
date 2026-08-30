@@ -121,8 +121,8 @@ func (w *Window) openSettings() {
 		ftpUserList.SetModel(userDisplayItems())
 	}
 
-	fieldFont := Font{PointSize: 9}
-	hintFont := Font{PointSize: 8}
+	fieldFont := Font{Family: "Segoe UI", PointSize: 9}
+	hintFont := Font{Family: "Segoe UI", PointSize: 8}
 
 	dialog := Dialog{
 		AssignTo:      &dlg,
@@ -178,9 +178,9 @@ func (w *Window) openSettings() {
 									LineEdit{AssignTo: &ftpTLSCert, Text: cfg.FTP.TLS.CertFile},
 									Label{Text: "TLS 키 파일"},
 									LineEdit{AssignTo: &ftpTLSKey, Text: cfg.FTP.TLS.KeyFile},
-									Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: Font{PointSize: 9, Bold: true}},
+									Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: Font{Family: "Segoe UI", PointSize: 9, Bold: true}},
 									TextEdit{AssignTo: &ftpAllowlist, Text: joinAllowlist(cfg.FTP.IPAllowlist), MinSize: Size{Height: 50}, VScroll: true},
-									Label{Text: "FTP 계정", Font: Font{PointSize: 9, Bold: true}},
+									Label{Text: "FTP 계정", Font: Font{Family: "Segoe UI", PointSize: 9, Bold: true}},
 									ListBox{AssignTo: &ftpUserList, Model: userDisplayItems(), MinSize: Size{Height: 110}},
 									Composite{
 										Layout: HBox{MarginsZero: true},
@@ -229,7 +229,7 @@ func (w *Window) openSettings() {
 							LineEdit{AssignTo: &tftpListen, Text: cfg.TFTP.Listen},
 							Label{Text: "루트 폴더"},
 							pathField(&tftpRootDir, cfg.TFTP.RootDir, &dlg),
-							Label{Text: "권한", Font: Font{PointSize: 9, Bold: true}},
+							Label{Text: "권한", Font: Font{Family: "Segoe UI", PointSize: 9, Bold: true}},
 							RadioButton{AssignTo: &tftpPermRW, Text: "읽기·쓰기 허용"},
 							RadioButton{AssignTo: &tftpPermRO, Text: "읽기 전용"},
 							RadioButton{AssignTo: &tftpPermWO, Text: "쓰기 전용"},
@@ -262,7 +262,7 @@ func (w *Window) openSettings() {
 									LineEdit{AssignTo: &syslogTLSCert, Text: cfg.Syslog.TLS.CertFile},
 									Label{Text: "TLS 키 파일"},
 									LineEdit{AssignTo: &syslogTLSKey, Text: cfg.Syslog.TLS.KeyFile},
-									Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: Font{PointSize: 9, Bold: true}},
+									Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: Font{Family: "Segoe UI", PointSize: 9, Bold: true}},
 									TextEdit{AssignTo: &syslogAllowlist, Text: joinAllowlist(cfg.Syslog.IPAllowlist), MinSize: Size{Height: 50}, VScroll: true},
 								},
 							},
@@ -275,12 +275,12 @@ func (w *Window) openSettings() {
 							CheckBox{AssignTo: &webEnabled, Text: "Web 사용", Checked: cfg.WebUI.Enabled},
 							Label{Text: "리슨 주소 (host:port)"},
 							LineEdit{AssignTo: &webListen, Text: cfg.WebUI.Listen},
-							Label{Text: "관리자 계정", Font: Font{PointSize: 9, Bold: true}},
+							Label{Text: "관리자 계정", Font: Font{Family: "Segoe UI", PointSize: 9, Bold: true}},
 							Label{Text: "사용자 이름"},
 							LineEdit{AssignTo: &webUsername, Text: cfg.WebUI.Auth.Username},
 							Label{Text: "비밀번호 (변경하려면 입력, 비워두면 유지)"},
 							LineEdit{AssignTo: &webPassword, PasswordMode: true},
-							Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: Font{PointSize: 9, Bold: true}},
+							Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: Font{Family: "Segoe UI", PointSize: 9, Bold: true}},
 							TextEdit{AssignTo: &webAllowlist, Text: joinAllowlist(cfg.WebUI.IPAllowlist), MinSize: Size{Height: 50}, VScroll: true},
 							VSpacer{},
 						},

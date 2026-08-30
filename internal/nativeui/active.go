@@ -5,6 +5,7 @@ package nativeui
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -197,6 +198,13 @@ func (m *activeTableModel) Value(row, col int) interface{} {
 	}
 }
 
+// progressBarWidth is how many block characters formatProgress draws — a
+// TableView cell can't host a real child widget, so the 진행률 column
+// renders a Unicode block-character bar (█ filled / ░ empty) instead of
+// just a bare percentage, giving it the same at-a-glance shape as the web
+// dashboard's <div class="progress-fill">.
+const progressBarWidth = 10
+
 func formatProgress(r activeRow) string {
 	if r.bytesTotal <= 0 {
 		return formatBytes(r.bytesDone)
@@ -205,7 +213,9 @@ func formatProgress(r activeRow) string {
 	if pct > 100 {
 		pct = 100
 	}
-	return fmt.Sprintf("%d%%", pct)
+	filled := pct * progressBarWidth / 100
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", progressBarWidth-filled)
+	return fmt.Sprintf("%s %d%%", bar, pct)
 }
 
 func formatSpeed(bps float64) string {

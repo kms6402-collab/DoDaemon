@@ -43,11 +43,12 @@ var (
 
 	// Dark terminal palette, used only by the event log panel — matches
 	// style.css's --term-* tokens (the one deliberately dark surface).
-	colorTermBG   = walk.RGB(0x10, 0x14, 0x1f)
-	colorTermText = walk.RGB(0xe6, 0xe9, 0xef)
-	colorTermDim  = walk.RGB(0x7d, 0x83, 0x98)
-	colorTermInfo = walk.RGB(0x5a, 0xa9, 0xe6)
-	colorTermErr  = walk.RGB(0xf2, 0x55, 0x5a)
+	colorTermBG         = walk.RGB(0x10, 0x14, 0x1f)
+	colorTermBGElevated = walk.RGB(0x17, 0x1c, 0x2b)
+	colorTermText       = walk.RGB(0xe6, 0xe9, 0xef)
+	colorTermDim        = walk.RGB(0x7d, 0x83, 0x98)
+	colorTermInfo       = walk.RGB(0x5a, 0xa9, 0xe6)
+	colorTermErr        = walk.RGB(0xf2, 0x55, 0x5a)
 )
 
 // navEntry is the fixed service ordering shown in the sidebar — same order
@@ -107,7 +108,9 @@ type Window struct {
 	btnStopBox                             *walk.Composite
 	btnStopLbl                             *walk.Label
 	filterAll, filterInfo, filterErr       *walk.PushButton
-	autoscroll                             *walk.CheckBox
+	autoscrollBox                          *walk.Composite
+	autoscrollLbl                          *walk.Label
+	autoscrollOn                           bool
 	logTableView                           *walk.TableView
 	clockLbl                               *walk.Label
 	fbStatusLbl, fbRxLbl, fbTxLbl          *walk.Label
@@ -126,15 +129,16 @@ const maxRawEvents = 1000
 // to trigger the app's own graceful shutdown.
 func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClose func()) (*Window, error) {
 	w := &Window{
-		tracker:     newActiveTracker(),
-		activeModel: &activeTableModel{},
-		logModel:    newEventTableModel(),
-		stats:       newStatsTracker(),
-		configPath:  configPath,
-		serverAddr:  localOutboundAddr(),
-		nav:         make(map[string]*navWidgets),
-		permRadios:  make(map[string]*walk.RadioButton),
-		level:       "all",
+		tracker:      newActiveTracker(),
+		activeModel:  &activeTableModel{},
+		logModel:     newEventTableModel(),
+		stats:        newStatsTracker(),
+		configPath:   configPath,
+		serverAddr:   localOutboundAddr(),
+		nav:          make(map[string]*navWidgets),
+		permRadios:   make(map[string]*walk.RadioButton),
+		level:        "all",
+		autoscrollOn: true,
 	}
 	w.cfg.Store(initialCfg)
 	w.selected = w.defaultSelection()
@@ -145,30 +149,30 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 	}
 	w.icon = icon
 
-	baseFont := Font{PointSize: 9}
-	titleFont := Font{PointSize: 9, Bold: true}
+	baseFont := Font{Family: "Segoe UI", PointSize: 9}
+	titleFont := Font{Family: "Segoe UI", PointSize: 9, Bold: true}
 
 	navChildren := make([]Widget, 0, len(navOrder)+4)
-	navChildren = append(navChildren, Label{Text: "서비스", Font: Font{PointSize: 8, Bold: true}, TextColor: colorFaint})
+	navChildren = append(navChildren, Label{Text: "서비스", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorFaint})
 	for _, ne := range navOrder {
 		ne := ne
 		nw := &navWidgets{}
 		w.nav[ne.key] = nw
 		navChildren = append(navChildren, Composite{
 			AssignTo:   &nw.container,
-			Background: SolidColorBrush{Color: colorSidebarBG},
+			Background: SolidColorBrush{Color: colorCardBG},
 			Layout:     HBox{Margins: Margins{Left: 8, Top: 7, Right: 8, Bottom: 7}, Spacing: 6},
 			Children: []Widget{
-				Label{AssignTo: &nw.dot, Text: "■", TextColor: colorFaint, Font: Font{PointSize: 9}},
+				Label{AssignTo: &nw.dot, Text: "■", TextColor: colorFaint, Font: Font{Family: "Segoe UI", PointSize: 9}},
 				Composite{
 					Layout: VBox{MarginsZero: true, SpacingZero: true},
 					Children: []Widget{
-						Label{AssignTo: &nw.nameLbl, Text: ne.name, Font: Font{PointSize: 9, Bold: true}},
-						Label{AssignTo: &nw.protoLbl, Text: "-", Font: Font{PointSize: 8}, TextColor: colorFaint},
+						Label{AssignTo: &nw.nameLbl, Text: ne.name, Font: Font{Family: "Segoe UI", PointSize: 9, Bold: true}},
+						Label{AssignTo: &nw.protoLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
 					},
 				},
 				HSpacer{},
-				Label{AssignTo: &nw.rateLbl, Text: "—", Font: Font{PointSize: 8}, TextColor: colorDim},
+				Label{AssignTo: &nw.rateLbl, Text: "—", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorDim},
 			},
 		})
 	}
@@ -186,8 +190,8 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 			AssignTo: &w.dirSection,
 			Layout:   VBox{MarginsZero: true, Spacing: 4},
 			Children: []Widget{
-				Label{Text: "디렉터리", Font: Font{PointSize: 8, Bold: true}, TextColor: colorFaint},
-				Label{AssignTo: &w.dirPathLbl, Text: "-", Font: Font{PointSize: 8}, TextColor: colorText},
+				Label{Text: "디렉터리", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorFaint},
+				Label{AssignTo: &w.dirPathLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorText},
 				Composite{
 					Layout: HBox{MarginsZero: true, Spacing: 6},
 					Children: []Widget{
@@ -200,7 +204,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		Composite{
 			AssignTo: &w.permSection,
 			Layout:   VBox{MarginsZero: true, Spacing: 2},
-			Children: append([]Widget{Label{Text: "권한", Font: Font{PointSize: 8, Bold: true}, TextColor: colorFaint}}, permWidgets...),
+			Children: append([]Widget{Label{Text: "권한", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorFaint}}, permWidgets...),
 		},
 		VSpacer{},
 		PushButton{Text: "⚙ 설정", OnClicked: w.openSettings},
@@ -223,13 +227,13 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 				MaxSize:    Size{Height: 34},
 				Layout:     HBox{Margins: Margins{Left: 14, Top: 6, Right: 14, Bottom: 6}, Spacing: 8},
 				Children: []Widget{
-					Label{Text: "□", Font: Font{PointSize: 8}, TextColor: colorFaint},
-					Label{Text: "□", Font: Font{PointSize: 8}, TextColor: colorFaint},
-					Label{Text: "□", Font: Font{PointSize: 8}, TextColor: colorFaint},
-					Label{Text: "DoDaeMon", Font: Font{PointSize: 10, Bold: true}},
-					Label{Text: "TFTP · FTP · SYSLOG · WEB 서버 콘솔", Font: Font{PointSize: 8}, TextColor: colorFaint},
+					Label{Text: "□", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
+					Label{Text: "□", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
+					Label{Text: "□", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
+					Label{Text: "DoDaeMon", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
+					Label{Text: "TFTP · FTP · SYSLOG · WEB 서버 콘솔", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
 					HSpacer{},
-					Label{AssignTo: &w.clockLbl, Text: "-", Font: Font{PointSize: 8}, TextColor: colorDim},
+					Label{AssignTo: &w.clockLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorDim},
 				},
 			},
 			Composite{
@@ -237,7 +241,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 				Layout:        HBox{MarginsZero: true, SpacingZero: true},
 				Children: []Widget{
 					Composite{
-						Background: SolidColorBrush{Color: colorSidebarBG},
+						Background: SolidColorBrush{Color: colorCardBG},
 						MinSize:    Size{Width: 230},
 						MaxSize:    Size{Width: 230},
 						Layout:     VBox{Margins: Margins{Left: 12, Top: 12, Right: 12, Bottom: 12}, Spacing: 4},
@@ -245,18 +249,18 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 					},
 					Composite{
 						StretchFactor: 1,
-						Background:    SolidColorBrush{Color: colorPageBG},
+						Background:    SolidColorBrush{Color: colorCardBG},
 						Layout:        VBox{Margins: Margins{Left: 24, Top: 16, Right: 28, Bottom: 16}, Spacing: 10},
 						Children: []Widget{
-							Label{Text: "패킷 서비스", Font: Font{PointSize: 8, Bold: true}, TextColor: colorAccent},
+							Label{Text: "패킷 서비스", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorAccent},
 							Composite{
 								Layout: HBox{MarginsZero: true},
 								Children: []Widget{
 									Composite{
 										Layout: VBox{MarginsZero: true, SpacingZero: true},
 										Children: []Widget{
-											Label{AssignTo: &w.titleLbl, Text: "-", Font: Font{PointSize: 16, Bold: true}},
-											Label{AssignTo: &w.metaLbl, Text: "-", Font: Font{PointSize: 9}, TextColor: colorDim},
+											Label{AssignTo: &w.titleLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 16, Bold: true}},
+											Label{AssignTo: &w.metaLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 9}, TextColor: colorDim},
 										},
 									},
 									HSpacer{},
@@ -265,7 +269,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										Background: SolidColorBrush{Color: colorSidebarBG},
 										Layout:     HBox{Margins: Margins{Left: 10, Top: 4, Right: 10, Bottom: 4}, MarginsZero: false},
 										Children: []Widget{
-											Label{AssignTo: &w.statusBadge, Text: "확인 중", Font: Font{PointSize: 8, Bold: true}, TextColor: colorDim},
+											Label{AssignTo: &w.statusBadge, Text: "확인 중", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorDim},
 										},
 									},
 									PushButton{AssignTo: &w.btnRestart, Text: "재시작", OnClicked: w.onRestart},
@@ -279,7 +283,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										Background: SolidColorBrush{Color: colorStopBtn},
 										Layout:     HBox{Margins: Margins{Left: 14, Top: 5, Right: 14, Bottom: 5}},
 										Children: []Widget{
-											Label{AssignTo: &w.btnStopLbl, Text: "정지", TextColor: walk.RGB(0xff, 0xff, 0xff), Font: Font{PointSize: 9}},
+											Label{AssignTo: &w.btnStopLbl, Text: "정지", TextColor: walk.RGB(0xff, 0xff, 0xff), Font: Font{Family: "Segoe UI", PointSize: 9}},
 										},
 									},
 								},
@@ -304,11 +308,12 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										LastColumnStretched: true,
 										MinSize:             Size{Height: 130},
 										MaxSize:             Size{Height: 130},
+										Font:                Font{Family: "Consolas", PointSize: 9},
 										Columns: []TableViewColumn{
 											{Title: "파일", Width: 200},
 											{Title: "클라이언트", Width: 110},
 											{Title: "방향", Width: 60},
-											{Title: "진행률", Width: 70},
+											{Title: "진행률", Width: 140},
 											{Title: "속도", Width: 90},
 											{Title: "남은 시간"},
 										},
@@ -330,7 +335,18 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 											PushButton{AssignTo: &w.filterInfo, Text: "INFO", OnClicked: func() { w.setLevelFilter("info") }},
 											PushButton{AssignTo: &w.filterErr, Text: "ERROR", OnClicked: func() { w.setLevelFilter("error") }},
 											HSpacer{},
-											CheckBox{AssignTo: &w.autoscroll, Text: "자동 스크롤", Checked: true},
+											// A CheckBox's label text renders in the OS default
+											// (near-black) color, which is invisible against
+											// this panel's dark background — Composite+Label
+											// toggle again, same reasoning as btnStopBox.
+											Composite{
+												AssignTo:   &w.autoscrollBox,
+												Background: SolidColorBrush{Color: colorTermBGElevated},
+												Layout:     HBox{Margins: Margins{Left: 10, Top: 4, Right: 10, Bottom: 4}},
+												Children: []Widget{
+													Label{AssignTo: &w.autoscrollLbl, Text: "자동 스크롤 켜짐", TextColor: colorTermText, Font: Font{Family: "Segoe UI", PointSize: 8}},
+												},
+											},
 										},
 									},
 									TableView{
@@ -338,6 +354,9 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										Model:               w.logModel,
 										LastColumnStretched: true,
 										StretchFactor:       1,
+										HeaderHidden:        true,
+										Background:          SolidColorBrush{Color: colorTermBG},
+										Font:                Font{Family: "Consolas", PointSize: 9},
 										Columns: []TableViewColumn{
 											{Title: "시간", Width: 80},
 											{Title: "소스", Width: 70},
@@ -356,10 +375,10 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 				MaxSize:    Size{Height: 26},
 				Layout:     HBox{Margins: Margins{Left: 14, Top: 4, Right: 14, Bottom: 4}, Spacing: 12},
 				Children: []Widget{
-					Label{AssignTo: &w.fbStatusLbl, Text: "-", Font: Font{PointSize: 8}, TextColor: colorFaint},
+					Label{AssignTo: &w.fbStatusLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
 					HSpacer{},
-					Label{AssignTo: &w.fbRxLbl, Text: "RX 0 B", Font: Font{PointSize: 8}, TextColor: colorFaint},
-					Label{AssignTo: &w.fbTxLbl, Text: "TX 0 B", Font: Font{PointSize: 8}, TextColor: colorFaint},
+					Label{AssignTo: &w.fbRxLbl, Text: "RX 0 B", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
+					Label{AssignTo: &w.fbTxLbl, Text: "TX 0 B", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
 				},
 			},
 		},
@@ -388,6 +407,8 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 	}
 	w.btnStopBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onStop() })
 	w.btnStopLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onStop() })
+	w.autoscrollBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.toggleAutoscroll() })
+	w.autoscrollLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.toggleAutoscroll() })
 
 	ch, unsub := bus.Subscribe(256)
 	w.unsubscribe = unsub
@@ -406,8 +427,8 @@ func kpiTile(assign **walk.Label, label string) Composite {
 		StretchFactor: 1,
 		Layout:        VBox{MarginsZero: true, SpacingZero: true},
 		Children: []Widget{
-			Label{AssignTo: assign, Text: "0", Font: Font{PointSize: 16, Bold: true}},
-			Label{Text: label, Font: Font{PointSize: 8}, TextColor: colorDim},
+			Label{AssignTo: assign, Text: "0", Font: Font{Family: "Segoe UI", PointSize: 16, Bold: true}},
+			Label{Text: label, Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorDim},
 		},
 	}
 }
@@ -499,6 +520,15 @@ func (w *Window) setLevelFilter(level string) {
 	w.rebuildLog()
 }
 
+func (w *Window) toggleAutoscroll() {
+	w.autoscrollOn = !w.autoscrollOn
+	if w.autoscrollOn {
+		w.autoscrollLbl.SetText("자동 스크롤 켜짐")
+	} else {
+		w.autoscrollLbl.SetText("자동 스크롤 꺼짐")
+	}
+}
+
 // consumeEvents is the single reader of the event bus for the native UI —
 // it updates the active-session tracker and per-service stats for every
 // event (regardless of which service is selected) but only touches the
@@ -539,7 +569,7 @@ func (w *Window) consumeEvents(ch <-chan eventbus.Event) {
 				w.activeModel.setRows(w.tracker.snapshotFor(w.selected))
 				if w.passesLevel(ev) {
 					w.logModel.push(ev)
-					if w.autoscroll.Checked() {
+					if w.autoscrollOn {
 						w.logTableView.EnsureItemVisible(0)
 					}
 				}
@@ -594,10 +624,10 @@ func (w *Window) refreshNav() {
 		}
 		nw.dot.SetTextColor(dotColor)
 
-		bg := colorSidebarBG
+		bg := colorCardBG
 		nameColor := colorText
 		if ne.key == w.selected {
-			bg = colorCardBG
+			bg = colorAccentDim
 			nameColor = colorAccent
 		}
 		if brush, err := walk.NewSolidColorBrush(bg); err == nil {

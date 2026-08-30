@@ -67,6 +67,8 @@ type settingsDTO struct {
 	TFTPAllowRead  bool   `json:"tftp_allow_read"`
 	TFTPAllowWrite bool   `json:"tftp_allow_write"`
 	TFTPMaxBlksize int    `json:"tftp_max_blksize"`
+	TFTPTimeoutSec int    `json:"tftp_timeout_sec"`
+	TFTPMaxRetries int    `json:"tftp_max_retries"`
 
 	SyslogEnabled     bool     `json:"syslog_enabled"`
 	SyslogUDPListen   string   `json:"syslog_udp_listen"`
@@ -117,6 +119,8 @@ func toDTO(cfg *config.Config) settingsDTO {
 		TFTPAllowRead:  cfg.TFTP.AllowRead,
 		TFTPAllowWrite: cfg.TFTP.AllowWrite,
 		TFTPMaxBlksize: cfg.TFTP.MaxBlksize,
+		TFTPTimeoutSec: cfg.TFTP.TimeoutSec,
+		TFTPMaxRetries: cfg.TFTP.MaxRetries,
 
 		SyslogEnabled:     cfg.Syslog.Enabled,
 		SyslogUDPListen:   cfg.Syslog.UDPListen,
@@ -187,6 +191,8 @@ func applyDTO(base *config.Config, dto settingsDTO) (config.Config, error) {
 	newCfg.TFTP.AllowRead = dto.TFTPAllowRead
 	newCfg.TFTP.AllowWrite = dto.TFTPAllowWrite
 	newCfg.TFTP.MaxBlksize = dto.TFTPMaxBlksize
+	newCfg.TFTP.TimeoutSec = dto.TFTPTimeoutSec
+	newCfg.TFTP.MaxRetries = dto.TFTPMaxRetries
 
 	newCfg.Syslog.Enabled = dto.SyslogEnabled
 	newCfg.Syslog.UDPListen = dto.SyslogUDPListen

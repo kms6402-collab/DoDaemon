@@ -99,7 +99,7 @@ func (w *Window) openSettings() {
 	var tftpEnabled *walk.CheckBox
 	var tftpPermRW, tftpPermRO, tftpPermWO *walk.RadioButton
 	var tftpListen, tftpRootDir *walk.LineEdit
-	var tftpMaxBlksize *walk.NumberEdit
+	var tftpMaxBlksize, tftpTimeoutSec, tftpMaxRetries *walk.NumberEdit
 
 	var syslogEnabled, syslogCompress, syslogTLSEnabled *walk.CheckBox
 	var syslogUDP, syslogTCP, syslogLogDir, syslogTLSCert, syslogTLSKey *walk.LineEdit
@@ -235,6 +235,10 @@ func (w *Window) openSettings() {
 							RadioButton{AssignTo: &tftpPermWO, Text: "쓰기 전용"},
 							Label{Text: "최대 블록 크기 (8~65464)"},
 							NumberEdit{AssignTo: &tftpMaxBlksize, Value: float64(cfg.TFTP.MaxBlksize), MinValue: 8, MaxValue: 65464, Decimals: 0},
+							Label{Text: "ACK 응답 대기 시간 (초, 1~255)"},
+							NumberEdit{AssignTo: &tftpTimeoutSec, Value: float64(cfg.TFTP.TimeoutSec), MinValue: 1, MaxValue: 255, Decimals: 0},
+							Label{Text: "재전송 최대 횟수 (1~20)"},
+							NumberEdit{AssignTo: &tftpMaxRetries, Value: float64(cfg.TFTP.MaxRetries), MinValue: 1, MaxValue: 20, Decimals: 0},
 							VSpacer{},
 						},
 					},
@@ -316,6 +320,8 @@ func (w *Window) openSettings() {
 						newCfg.TFTP.AllowRead = tftpPermRW.Checked() || tftpPermRO.Checked()
 						newCfg.TFTP.AllowWrite = tftpPermRW.Checked() || tftpPermWO.Checked()
 						newCfg.TFTP.MaxBlksize = int(tftpMaxBlksize.Value())
+						newCfg.TFTP.TimeoutSec = int(tftpTimeoutSec.Value())
+						newCfg.TFTP.MaxRetries = int(tftpMaxRetries.Value())
 
 						newCfg.Syslog.Enabled = syslogEnabled.Checked()
 						newCfg.Syslog.UDPListen = syslogUDP.Text()

@@ -66,6 +66,8 @@ type TFTPConfig struct {
 	AllowRead  bool   `yaml:"allow_read"`  // RRQ / downloads
 	AllowWrite bool   `yaml:"allow_write"` // WRQ / uploads
 	MaxBlksize int    `yaml:"max_blksize"`
+	TimeoutSec int    `yaml:"timeout_sec"` // ACK wait before retransmit
+	MaxRetries int    `yaml:"max_retries"` // retransmit attempts before aborting a block
 }
 
 type RotateConfig struct {
@@ -119,6 +121,8 @@ func Default() *Config {
 			AllowRead:  true,
 			AllowWrite: false,
 			MaxBlksize: 65464,
+			TimeoutSec: 3,
+			MaxRetries: 5,
 		},
 		Syslog: SyslogConfig{
 			Enabled:   false,
@@ -206,8 +210,27 @@ func (c *Config) Validate() error {
 		if c.TFTP.RootDir == "" {
 			return fmt.Errorf("tftp.root_dir must not be empty")
 		}
+		// The directory is created on demand rather than required to exist
+		// up front: the moment a user enables TFTP, RootDir is almost
+		// always still the untouched default (./data/tftp), which nothing
+		// has created yet — rejecting that would make "enable TFTP" fail
+		// on a fresh install. A path that genuinely can't be created (bad
+		// drive, reserved name, no permission) still surfaces as an error.
+		if fi, err := os.Stat(c.TFTP.RootDir); err == nil {
+			if !fi.IsDir() {
+				return fmt.Errorf("tftp.root_dir %q exists but is not a directory", c.TFTP.RootDir)
+			}
+		} else if err := os.MkdirAll(c.TFTP.RootDir, 0o750); err != nil {
+			return fmt.Errorf("tftp.root_dir %q is not usable: %w", c.TFTP.RootDir, err)
+		}
 		if c.TFTP.MaxBlksize < 8 || c.TFTP.MaxBlksize > 65464 {
 			return fmt.Errorf("tftp.max_blksize %d out of range [8,65464]", c.TFTP.MaxBlksize)
+		}
+		if c.TFTP.TimeoutSec < 1 || c.TFTP.TimeoutSec > 255 {
+			return fmt.Errorf("tftp.timeout_sec %d out of range [1,255]", c.TFTP.TimeoutSec)
+		}
+		if c.TFTP.MaxRetries < 1 || c.TFTP.MaxRetries > 20 {
+			return fmt.Errorf("tftp.max_retries %d out of range [1,20]", c.TFTP.MaxRetries)
 		}
 	}
 

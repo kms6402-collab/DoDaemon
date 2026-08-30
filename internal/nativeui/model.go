@@ -3,6 +3,7 @@
 package nativeui
 
 import (
+	"regexp"
 	"sync"
 
 	"github.com/lxn/walk"
@@ -12,15 +13,33 @@ import (
 
 const maxEventRows = 500
 
+var warnPattern = regexp.MustCompile(`(?i)warn|재시도|retransmit|timeout|타임아웃`)
+
+// severityOf classifies an event into the same four buckets the web
+// dashboard's static/app.js uses (info/transfer/warn/error), so both UIs
+// filter and color the log identically.
+func severityOf(ev eventbus.Event) string {
+	switch {
+	case ev.Kind == eventbus.KindError:
+		return "error"
+	case warnPattern.MatchString(ev.Message):
+		return "warn"
+	case ev.Kind == eventbus.KindTransfer:
+		return "transfer"
+	default:
+		return "info"
+	}
+}
+
 // eventRow is a display-ready copy of an eventbus.Event (walk's TableView
 // re-reads Value() often, so we pre-format once on push rather than on
 // every paint).
 type eventRow struct {
-	time    string
-	source  string
-	kind    string
-	message string
-	isError bool
+	time     string
+	source   string
+	kind     string
+	message  string
+	severity string
 }
 
 // eventTableModel feeds the live event TableView. All mutation must happen
@@ -81,11 +100,11 @@ func (m *eventTableModel) push(ev eventbus.Event) {
 
 func toEventRow(ev eventbus.Event) eventRow {
 	return eventRow{
-		time:    ev.Time.Local().Format("15:04:05"),
-		source:  ev.Source,
-		kind:    string(ev.Kind),
-		message: formatMessage(ev),
-		isError: ev.Kind == eventbus.KindError,
+		time:     ev.Time.Local().Format("15:04:05"),
+		source:   ev.Source,
+		kind:     string(ev.Kind),
+		message:  formatMessage(ev),
+		severity: severityOf(ev),
 	}
 }
 
@@ -103,11 +122,26 @@ func (m *eventTableModel) replace(events []eventbus.Event) {
 	m.PublishRowsReset()
 }
 
+// severityColor maps a severity bucket to its console color — the exact
+// palette from docs/tftp_daemon_console_spec.pdf §4 Task 1.
+func severityColor(sev string) walk.Color {
+	switch sev {
+	case "error":
+		return colorTermErr
+	case "warn":
+		return colorTermWarn
+	case "transfer":
+		return colorTermOK
+	default:
+		return colorTermInfo
+	}
+}
+
 // StyleCell renders the event log as a dark terminal panel — the one
 // deliberately dark surface in an otherwise light UI (matching the web
 // dashboard's .log-viewer, see internal/webui/static/style.css) — with
-// error rows picked out in red, independent of the light theme the rest
-// of the native window uses.
+// each row's severity picked out in its own color, independent of the
+// light theme the rest of the native window uses.
 func (m *eventTableModel) StyleCell(style *walk.CellStyle) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -116,6 +150,7 @@ func (m *eventTableModel) StyleCell(style *walk.CellStyle) {
 		return
 	}
 	r := m.rows[row]
+	sevColor := severityColor(r.severity)
 
 	style.BackgroundColor = colorTermBG
 	style.TextColor = colorTermText
@@ -123,14 +158,10 @@ func (m *eventTableModel) StyleCell(style *walk.CellStyle) {
 	case 1: // source
 		style.TextColor = colorTermInfo
 	case 2: // kind
-		if r.isError {
-			style.TextColor = colorTermErr
-		} else {
-			style.TextColor = colorTermInfo
-		}
+		style.TextColor = sevColor
 	case 3: // message
-		if r.isError {
-			style.TextColor = colorTermErr
+		if r.severity == "warn" || r.severity == "error" {
+			style.TextColor = sevColor
 		}
 	default:
 		style.TextColor = colorTermDim

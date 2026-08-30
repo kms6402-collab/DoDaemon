@@ -41,14 +41,18 @@ var (
 	colorText      = walk.RGB(0x14, 0x16, 0x1a) // --text
 	colorStopBtn   = walk.RGB(0x33, 0x41, 0x5c) // --stop-btn
 
-	// Dark terminal palette, used only by the event log panel — matches
-	// style.css's --term-* tokens (the one deliberately dark surface).
-	colorTermBG         = walk.RGB(0x10, 0x14, 0x1f)
-	colorTermBGElevated = walk.RGB(0x17, 0x1c, 0x2b)
-	colorTermText       = walk.RGB(0xe6, 0xe9, 0xef)
-	colorTermDim        = walk.RGB(0x7d, 0x83, 0x98)
-	colorTermInfo       = walk.RGB(0x5a, 0xa9, 0xe6)
-	colorTermErr        = walk.RGB(0xf2, 0x55, 0x5a)
+	// Dark terminal palette, used only by the event log panel — the exact
+	// console colors from docs/tftp_daemon_console_spec.pdf §4 Task 1
+	// (background #0f172a, text #38bdf8 / #4ade80 — Tailwind's slate-900
+	// with sky-400/green-400 accents), matching style.css's --term-* tokens.
+	colorTermBG         = walk.RGB(0x0f, 0x17, 0x2a)
+	colorTermBGElevated = walk.RGB(0x1e, 0x29, 0x3b)
+	colorTermText       = walk.RGB(0xe2, 0xe8, 0xf0)
+	colorTermDim        = walk.RGB(0x94, 0xa3, 0xb8)
+	colorTermInfo       = walk.RGB(0x38, 0xbd, 0xf8)
+	colorTermOK         = walk.RGB(0x4a, 0xde, 0x80)
+	colorTermWarn       = walk.RGB(0xfb, 0xbf, 0x24)
+	colorTermErr        = walk.RGB(0xf8, 0x71, 0x71)
 )
 
 // navEntry is the fixed service ordering shown in the sidebar — same order
@@ -96,28 +100,28 @@ type Window struct {
 	configPath string
 	serverAddr string
 
-	nav      map[string]*navWidgets
-	selected string
-	level    string // "all" | "info" | "error"
+	nav          map[string]*navWidgets
+	selected     string
+	levelFilters map[string]bool // "info"/"transfer"/"warn"/"error" -> shown, independently toggleable (matches app.js)
 
-	titleLbl, metaLbl, statusBadge         *walk.Label
-	statusBadgeBox                         *walk.Composite
-	kpiActive, kpiCompleted, kpiThroughput *walk.Label
-	kpiErrors                              *walk.Label
-	btnRestart                             *walk.PushButton
-	btnStopBox                             *walk.Composite
-	btnStopLbl                             *walk.Label
-	filterAll, filterInfo, filterErr       *walk.PushButton
-	autoscrollBox                          *walk.Composite
-	autoscrollLbl                          *walk.Label
-	autoscrollOn                           bool
-	logTableView                           *walk.TableView
-	clockLbl                               *walk.Label
-	fbStatusLbl, fbRxLbl, fbTxLbl          *walk.Label
-	dirSection                             *walk.Composite
-	dirPathLbl                             *walk.Label
-	permSection                            *walk.Composite
-	permRadios                             map[string]*walk.RadioButton
+	titleLbl, metaLbl, statusBadge                    *walk.Label
+	statusBadgeBox                                    *walk.Composite
+	kpiActive, kpiCompleted, kpiThroughput            *walk.Label
+	kpiErrors                                         *walk.Label
+	btnRestart                                        *walk.PushButton
+	btnPowerBox                                       *walk.Composite
+	btnPowerLbl                                       *walk.Label
+	filterInfo, filterTransfer, filterWarn, filterErr *walk.PushButton
+	autoscrollBox                                     *walk.Composite
+	autoscrollLbl                                     *walk.Label
+	autoscrollOn                                      bool
+	logTableView                                      *walk.TableView
+	clockLbl                                          *walk.Label
+	fbStatusLbl, fbRxLbl, fbTxLbl                     *walk.Label
+	dirSection                                        *walk.Composite
+	dirPathLbl                                        *walk.Label
+	permSection                                       *walk.Composite
+	permRadios                                        map[string]*walk.RadioButton
 
 	unsubscribe func()
 }
@@ -137,7 +141,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		serverAddr:   localOutboundAddr(),
 		nav:          make(map[string]*navWidgets),
 		permRadios:   make(map[string]*walk.RadioButton),
-		level:        "all",
+		levelFilters: map[string]bool{"info": true, "transfer": true, "warn": true, "error": true},
 		autoscrollOn: true,
 	}
 	w.cfg.Store(initialCfg)
@@ -218,9 +222,11 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		Icon:       icon,
 		Font:       baseFont,
 		Background: SolidColorBrush{Color: colorPageBG},
-		MinSize:    Size{Width: 980, Height: 640},
-		Size:       Size{Width: 1200, Height: 780},
-		Layout:     VBox{MarginsZero: true, SpacingZero: true},
+		// Default 1024x720, min 800x600 — docs/tftp_daemon_console_spec.pdf
+		// §4 Task 1's exact window sizing requirement.
+		MinSize: Size{Width: 800, Height: 600},
+		Size:    Size{Width: 1024, Height: 720},
+		Layout:  VBox{MarginsZero: true, SpacingZero: true},
 		Children: []Widget{
 			Composite{
 				Background: SolidColorBrush{Color: colorSidebarBG},
@@ -275,15 +281,18 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 									PushButton{AssignTo: &w.btnRestart, Text: "재시작", OnClicked: w.onRestart},
 									// A real PushButton ignores a plain Background brush under
 									// Win32 visual styles (would need BS_OWNERDRAW +
-									// WM_DRAWITEM to fill solid navy), so 정지 is a clickable
-									// colored Composite+Label instead — the same proven
-									// pattern as the sidebar nav rows and statusBadgeBox.
+									// WM_DRAWITEM to fill solid color), so the 시작/정지 toggle
+									// is a clickable colored Composite+Label instead — the
+									// same proven pattern as the sidebar nav rows and
+									// statusBadgeBox. Text and color swap between 시작 (green,
+									// stopped) and 정지 (navy, running) in refreshPowerButton —
+									// docs/tftp_daemon_console_spec.pdf §4 Task 2's "버튼
+									// 텍스트가 'Stop Server'로 변경" requirement.
 									Composite{
-										AssignTo:   &w.btnStopBox,
-										Background: SolidColorBrush{Color: colorStopBtn},
-										Layout:     HBox{Margins: Margins{Left: 14, Top: 5, Right: 14, Bottom: 5}},
+										AssignTo: &w.btnPowerBox,
+										Layout:   HBox{Margins: Margins{Left: 14, Top: 5, Right: 14, Bottom: 5}},
 										Children: []Widget{
-											Label{AssignTo: &w.btnStopLbl, Text: "정지", TextColor: walk.RGB(0xff, 0xff, 0xff), Font: Font{Family: "Segoe UI", PointSize: 9}},
+											Label{AssignTo: &w.btnPowerLbl, Text: "시작", TextColor: walk.RGB(0xff, 0xff, 0xff), Font: Font{Family: "Segoe UI", PointSize: 9}},
 										},
 									},
 								},
@@ -331,9 +340,10 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										Layout:     HBox{Margins: Margins{Left: 12, Top: 8, Right: 12, Bottom: 8}, Spacing: 6},
 										Children: []Widget{
 											Label{Text: "이벤트 로그", Font: titleFont, TextColor: colorTermText},
-											PushButton{AssignTo: &w.filterAll, Text: "전체", OnClicked: func() { w.setLevelFilter("all") }},
-											PushButton{AssignTo: &w.filterInfo, Text: "INFO", OnClicked: func() { w.setLevelFilter("info") }},
-											PushButton{AssignTo: &w.filterErr, Text: "ERROR", OnClicked: func() { w.setLevelFilter("error") }},
+											PushButton{AssignTo: &w.filterInfo, Text: "INFO", OnClicked: func() { w.toggleLevelFilter("info") }},
+											PushButton{AssignTo: &w.filterTransfer, Text: "TRANSFER", OnClicked: func() { w.toggleLevelFilter("transfer") }},
+											PushButton{AssignTo: &w.filterWarn, Text: "WARN", OnClicked: func() { w.toggleLevelFilter("warn") }},
+											PushButton{AssignTo: &w.filterErr, Text: "ERROR", OnClicked: func() { w.toggleLevelFilter("error") }},
 											HSpacer{},
 											// A CheckBox's label text renders in the OS default
 											// (near-black) color, which is invisible against
@@ -405,8 +415,8 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		nw.nameLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.selectService(key) })
 		nw.protoLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.selectService(key) })
 	}
-	w.btnStopBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onStop() })
-	w.btnStopLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onStop() })
+	w.btnPowerBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onPowerToggle() })
+	w.btnPowerLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onPowerToggle() })
 	w.autoscrollBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.toggleAutoscroll() })
 	w.autoscrollLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.toggleAutoscroll() })
 
@@ -415,7 +425,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 	go w.consumeEvents(ch)
 	go w.tickClock()
 
-	w.setLevelFilter("all")
+	w.initLevelFilterButtons()
 	w.refreshNav()
 	w.refreshDetail()
 
@@ -502,20 +512,35 @@ func (w *Window) selectService(key string) {
 	w.refreshDetail()
 }
 
-func (w *Window) setLevelFilter(level string) {
-	w.level = level
-	activeBrush, _ := walk.NewSolidColorBrush(colorAccentDim)
-	idleBrush, _ := walk.NewSolidColorBrush(colorCardBG)
-	for _, btn := range []*walk.PushButton{w.filterAll, w.filterInfo, w.filterErr} {
-		btn.SetBackground(idleBrush)
+// initLevelFilterButtons paints all four filter buttons in their initial
+// (all-active) state — levelFilters itself was already seeded all-true in
+// New(), this just makes the button chrome agree with that on first show.
+func (w *Window) initLevelFilterButtons() {
+	brush, err := walk.NewSolidColorBrush(colorCardBG)
+	if err != nil {
+		return
 	}
-	switch level {
-	case "info":
-		w.filterInfo.SetBackground(activeBrush)
-	case "error":
-		w.filterErr.SetBackground(activeBrush)
-	default:
-		w.filterAll.SetBackground(activeBrush)
+	for _, btn := range []*walk.PushButton{w.filterInfo, w.filterTransfer, w.filterWarn, w.filterErr} {
+		btn.SetBackground(brush)
+	}
+}
+
+// toggleLevelFilter flips one severity's visibility independently of the
+// others — matching internal/webui/static/app.js's log-filters click
+// handler (INFO/TRANSFER/WARN/ERROR are all separately toggleable, not a
+// single-select radio group).
+func (w *Window) toggleLevelFilter(level string) {
+	w.levelFilters[level] = !w.levelFilters[level]
+
+	btn := map[string]*walk.PushButton{
+		"info": w.filterInfo, "transfer": w.filterTransfer, "warn": w.filterWarn, "error": w.filterErr,
+	}[level]
+	bg := colorTermBGElevated
+	if w.levelFilters[level] {
+		bg = colorCardBG
+	}
+	if brush, err := walk.NewSolidColorBrush(bg); err == nil {
+		btn.SetBackground(brush)
 	}
 	w.rebuildLog()
 }
@@ -581,15 +606,16 @@ func (w *Window) consumeEvents(ch <-chan eventbus.Event) {
 	}
 }
 
+// passesLevel excludes throttled progress ticks from the log entirely
+// (they'd flood it — the 진행 중인 전송 table already shows live progress)
+// and otherwise checks the event's severity against the independently
+// toggleable filter buttons, matching internal/webui/static/app.js's
+// passesFilter.
 func (w *Window) passesLevel(ev eventbus.Event) bool {
-	switch w.level {
-	case "info":
-		return ev.Kind != eventbus.KindError
-	case "error":
-		return ev.Kind == eventbus.KindError
-	default:
-		return true
+	if isProgress, _ := ev.Fields["progress"].(bool); isProgress {
+		return false
 	}
+	return w.levelFilters[severityOf(ev)]
 }
 
 // rebuildLog re-derives the active-session and event-log views from scratch
@@ -707,9 +733,24 @@ func (w *Window) refreshDetail() {
 		}
 	}
 
+	w.refreshPowerButton(enabled)
 	w.refreshDirPanel()
 	w.rebuildLog()
 	w.refreshFooter()
+}
+
+// refreshPowerButton paints the 시작/정지 toggle for the currently
+// selected service's state — green "시작" when stopped, navy "정지" when
+// running (docs/tftp_daemon_console_spec.pdf §4 Task 2).
+func (w *Window) refreshPowerButton(enabled bool) {
+	text, bg := "시작", colorOK
+	if enabled {
+		text, bg = "정지", colorStopBtn
+	}
+	w.btnPowerLbl.SetText(text)
+	if brush, err := walk.NewSolidColorBrush(bg); err == nil {
+		w.btnPowerBox.SetBackground(brush)
+	}
 }
 
 func (w *Window) refreshKPIs() {
@@ -743,6 +784,22 @@ func (w *Window) refreshFooter() {
 func (w *Window) openDataDir() {
 	dir := w.cfg.Load().Server.DataDir
 	exec.Command("cmd", "/c", "start", "", dir).Start()
+}
+
+// ShowFirstRunNotice tells the operator, on the very first launch only,
+// that Windows Firewall will prompt for network access the moment a
+// service (TFTP/FTP/Syslog) actually starts listening, and that they need
+// to click 허용 for other machines to reach it. DoDaemon deliberately
+// never registers a firewall rule itself — that needs elevation this app
+// doesn't request, and silently changing firewall state without the user
+// driving it would cross a line this app shouldn't (see docs/
+// tftp_daemon_console_spec.pdf §5's guidance requirement).
+func (w *Window) ShowFirstRunNotice() {
+	walk.MsgBox(w.mw, "Windows 방화벽 안내",
+		"TFTP, FTP, Syslog 서비스를 사용하면 Windows 보안 경고 창이 표시될 수 있습니다.\n\n"+
+			"다른 컴퓨터에서 이 서버에 접속하려면 해당 안내에서 \"액세스 허용\"을 선택해야 합니다.\n"+
+			"이 프로그램은 방화벽 설정을 직접 변경하지 않습니다.",
+		walk.MsgBoxIconInformation)
 }
 
 func (w *Window) onDirOpen() {
@@ -781,8 +838,25 @@ func (w *Window) setTftpPermMode(mode string) {
 	})
 }
 
+func (w *Window) onStart() {
+	w.setServiceEnabled(w.selected, true)
+}
+
 func (w *Window) onStop() {
 	w.setServiceEnabled(w.selected, false)
+}
+
+// onPowerToggle is the 시작/정지 button's click handler — it reads the
+// selected service's current state fresh each time rather than tracking
+// its own, so it always does the opposite of whatever refreshPowerButton
+// last painted.
+func (w *Window) onPowerToggle() {
+	enabled, _, _, _, _ := serviceMeta(w.cfg.Load(), w.selected)
+	if enabled {
+		w.onStop()
+	} else {
+		w.onStart()
+	}
 }
 
 func (w *Window) onRestart() {

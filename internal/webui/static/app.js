@@ -4,7 +4,7 @@
   state.services.forEach((s) => (servicesByKey[s.key] = s));
 
   let selected = (state.services.find((s) => s.enabled) || state.services[0] || {}).key || "tftp";
-  let levelFilters = { info: true, warn: true, error: true };
+  let levelFilters = { info: true, transfer: true, warn: true, error: true };
   let autoscroll = true;
 
   // Per-source running stats, kept for every source regardless of which
@@ -319,6 +319,7 @@
   function severityOf(ev) {
     if (ev.kind === "error") return "error";
     if (/warn|재시도|retransmit|timeout|타임아웃/i.test(ev.message || "")) return "warn";
+    if (ev.kind === "transfer") return "transfer"; // 블록 진행률/시작/완료 — distinct from connect/auth INFO
     return "info";
   }
 

@@ -24,14 +24,18 @@
   --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Consolas, monospace;
 
   /* Dark terminal palette, used only by .log-viewer / .modal-dark */
-  --term-bg: #10141f;
-  --term-bg-elevated: #171c2b;
-  --term-border: #262c3f;
-  --term-text: #e6e9ef;
-  --term-dim: #7d8398;
-  --term-info: #5aa9e6;
-  --term-warn: #e0b23e;
-  --term-err: #f2555a;
+  /* Exact console palette from docs/tftp_daemon_console_spec.pdf §4 Task 1
+     (background #0f172a, text #38bdf8 / #4ade80 — Tailwind's slate-900
+     with sky-400/green-400 accents). */
+  --term-bg: #0f172a;
+  --term-bg-elevated: #1e293b;
+  --term-border: #334155;
+  --term-text: #e2e8f0;
+  --term-dim: #94a3b8;
+  --term-info: #38bdf8;
+  --term-ok: #4ade80;
+  --term-warn: #fbbf24;
+  --term-err: #f87171;
 }
 
 * { box-sizing: border-box; }
@@ -251,6 +255,7 @@ h1 { font-size: 26px; margin: 0 0 4px; letter-spacing: -0.01em; font-weight: 800
 }
 .filter-pill.active { opacity: 1; }
 .filter-pill.level-info.active { border-color: var(--term-info); color: var(--term-info); }
+.filter-pill.level-transfer.active { border-color: var(--term-ok); color: var(--term-ok); }
 .filter-pill.level-warn.active { border-color: var(--term-warn); color: var(--term-warn); }
 .filter-pill.level-error.active { border-color: var(--term-err); color: var(--term-err); }
 
@@ -302,6 +307,7 @@ table.data-table td.speed, table.data-table td.remaining { font-family: var(--mo
 .log-source { color: var(--term-info); font-weight: 700; }
 .log-level { font-weight: 800; font-size: 10.5px; }
 .log-level.info { color: var(--term-info); }
+.log-level.transfer { color: var(--term-ok); }
 .log-level.warn { color: var(--term-warn); }
 .log-level.error { color: var(--term-err); }
 .log-msg { color: var(--term-text); white-space: pre-wrap; word-break: break-word; }

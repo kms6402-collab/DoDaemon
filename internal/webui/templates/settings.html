@@ -100,6 +100,10 @@
           <label><input type="radio" name="tftp_perm_mode" value="wo"> 쓰기 전용</label>
         </div>
         <div class="field" style="margin-top:10px;"><label>최대 블록 크기 (8~65464)</label><input id="tftp_max_blksize" type="number" min="8" max="65464"></div>
+        <div class="form-row" style="margin-top:14px;">
+          <div class="field"><label>ACK 응답 대기 시간 (초, 1~255)</label><input id="tftp_timeout_sec" type="number" min="1" max="255"></div>
+          <div class="field"><label>재전송 최대 횟수 (1~20)</label><input id="tftp_max_retries" type="number" min="1" max="20"></div>
+        </div>
       </div>
 
       <div class="settings-page" data-page="syslog">

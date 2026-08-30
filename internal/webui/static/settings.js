@@ -244,6 +244,8 @@
         setField("tftp_root_dir", dto.tftp_root_dir);
         setTftpPermMode(dto.tftp_allow_read, dto.tftp_allow_write);
         setField("tftp_max_blksize", dto.tftp_max_blksize);
+        setField("tftp_timeout_sec", dto.tftp_timeout_sec);
+        setField("tftp_max_retries", dto.tftp_max_retries);
 
         setField("syslog_enabled", dto.syslog_enabled);
         setField("syslog_udp_listen", dto.syslog_udp_listen);
@@ -289,6 +291,8 @@
       tftp_allow_read: getTftpPermMode().allowRead,
       tftp_allow_write: getTftpPermMode().allowWrite,
       tftp_max_blksize: getInt("tftp_max_blksize"),
+      tftp_timeout_sec: getInt("tftp_timeout_sec"),
+      tftp_max_retries: getInt("tftp_max_retries"),
 
       syslog_enabled: getField("syslog_enabled"),
       syslog_udp_listen: getField("syslog_udp_listen"),

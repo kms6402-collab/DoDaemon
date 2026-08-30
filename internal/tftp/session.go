@@ -12,11 +12,7 @@ import (
 	"github.com/kms6402/dodaemon/internal/security"
 )
 
-const (
-	defaultBlksize = 512
-	defaultTimeout = 3 * time.Second
-	maxRetries     = 5
-)
+const defaultBlksize = 512
 
 type negotiated struct {
 	blksize int
@@ -29,7 +25,7 @@ type negotiated struct {
 // only ever accept a value the client offered or something more
 // conservative, never demand a larger blksize/timeout than requested.
 func (s *Server) negotiateOptions(req *request, fileSizeForRRQ int64) negotiated {
-	n := negotiated{blksize: defaultBlksize, timeout: defaultTimeout}
+	n := negotiated{blksize: defaultBlksize, timeout: time.Duration(s.cfg.TimeoutSec) * time.Second}
 
 	if v, ok := req.options["blksize"]; ok {
 		if bs, err := strconv.Atoi(v); err == nil && bs >= 8 && bs <= 65464 {
@@ -284,10 +280,10 @@ func (s *Server) handleWRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 }
 
 // sendAndWaitACK sends pkt and waits for an ACK matching wantBlock, retrying
-// on timeout up to maxRetries times.
+// on timeout up to cfg.max_retries times.
 func (s *Server) sendAndWaitACK(conn *net.UDPConn, pkt []byte, wantBlock uint16, timeout time.Duration) bool {
 	buf := make([]byte, 4)
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := 0; attempt < s.cfg.MaxRetries; attempt++ {
 		if _, err := conn.Write(pkt); err != nil {
 			return false
 		}

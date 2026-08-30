@@ -47,10 +47,11 @@ func run() error {
 	if err := chdirToExeDir(); err != nil {
 		return err
 	}
-	if err := ensureConfigExists(configPath); err != nil {
+	firstRun, err := ensureConfigExists(configPath)
+	if err != nil {
 		return err
 	}
-	return runNativeGUI(configPath)
+	return runNativeGUI(configPath, firstRun)
 }
 
 // chdirToExeDir makes every relative path in config.Default() (data_dir,
@@ -74,19 +75,20 @@ func chdirToExeDir() error {
 // launched with no setup — there's no CLI "config init" step anymore, so
 // this has to just work on first run. From then on Load reads back exactly
 // what was last saved (by either UI), which is what makes settings persist
-// across restarts.
-func ensureConfigExists(path string) error {
+// across restarts. The returned bool tells the caller whether this really
+// was a first run, so it knows whether to show first-run guidance.
+func ensureConfigExists(path string) (firstRun bool, err error) {
 	if _, err := os.Stat(path); err == nil {
-		return nil
+		return false, nil
 	} else if !os.IsNotExist(err) {
-		return err
+		return false, err
 	}
-	return config.Save(path, config.Default())
+	return true, config.Save(path, config.Default())
 }
 
 // runNativeGUI shows the native window and runs the server supervisor in
 // the background for as long as the window is open.
-func runNativeGUI(absConfigPath string) error {
+func runNativeGUI(absConfigPath string, firstRun bool) error {
 	cfg, err := config.Load(absConfigPath)
 	if err != nil {
 		return err
@@ -99,6 +101,15 @@ func runNativeGUI(absConfigPath string) error {
 	win, err := nativeui.New(absConfigPath, cfg, bus, cancel)
 	if err != nil {
 		return err
+	}
+	if firstRun {
+		// docs/tftp_daemon_console_spec.pdf §5's firewall-exception
+		// guidance: TFTP/FTP/Syslog listen for inbound connections, so
+		// Windows Firewall will prompt the first time one of them actually
+		// binds — this just tells the operator that prompt is expected and
+		// safe to allow, rather than auto-registering a rule (which would
+		// need elevation we don't have and shouldn't silently request).
+		win.ShowFirstRunNotice()
 	}
 
 	run := newRunFunc(absConfigPath, bus, win.UpdateConfig)

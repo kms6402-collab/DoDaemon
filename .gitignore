@@ -1,0 +1,6 @@
+/dodaemon
+/dodaemon.exe
+/dist/
+/data/
+configs/dodaemon.yaml
+*.log

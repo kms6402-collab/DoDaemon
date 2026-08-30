@@ -1,0 +1,30 @@
+{{define "login.html"}}
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DoDaemon 로그인</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="brand" style="padding:0 0 22px;"><span class="dot"></span> DoDaemon</div>
+    {{if .Error}}<div class="error-msg">{{.Error}}</div>{{end}}
+    <form method="post" action="/login">
+      <div class="field">
+        <label for="username">사용자 이름</label>
+        <input id="username" name="username" autocomplete="username" autofocus>
+      </div>
+      <div class="field">
+        <label for="password">비밀번호</label>
+        <input id="password" name="password" type="password" autocomplete="current-password">
+      </div>
+      <button class="btn primary" type="submit" style="width:100%;justify-content:center;">로그인</button>
+    </form>
+  </div>
+</div>
+</body>
+</html>
+{{end}}

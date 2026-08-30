@@ -1,0 +1,203 @@
+{{define "settings.html"}}
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DoDaemon 설정</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="shell" style="grid-template-columns:260px 1fr;">
+  <aside class="sidebar">
+    <div class="brand"><span class="dot"></span> DoDaeMon</div>
+    <div class="brand-tagline">설정</div>
+    <div class="sidebar-bottom" style="margin-top:8px;">
+      <a class="btn small" href="/">← 대시보드</a>
+      <a class="btn small" href="/logout">로그아웃</a>
+    </div>
+  </aside>
+  <main>
+    <h1>설정</h1>
+    <p class="subtitle">저장하면 실행 중인 서비스에 바로 적용됩니다.</p>
+
+    <div class="settings-tabs">
+      <div class="settings-tab active" data-tab="general">일반</div>
+      <div class="settings-tab" data-tab="ftp">FTP</div>
+      <div class="settings-tab" data-tab="tftp">TFTP</div>
+      <div class="settings-tab" data-tab="syslog">Syslog</div>
+      <div class="settings-tab" data-tab="web">Web</div>
+    </div>
+
+    <form id="settings-form" onsubmit="return false;">
+      <div class="settings-page active" data-page="general">
+        <div class="field">
+          <label>데이터 폴더</label>
+          <div class="path-row">
+            <input id="data_dir" type="text">
+            <button type="button" class="btn" data-browse="data_dir">폴더 찾기</button>
+          </div>
+        </div>
+
+        <div class="switch-row card" style="margin-top:16px;">
+          <div>
+            <div class="label">Windows 시작 시 자동 실행</div>
+            <div class="desc" id="autostart-desc">현재 사용자 로그인 시 DoDaemon을 자동으로 시작합니다.</div>
+          </div>
+          <label class="switch"><input type="checkbox" id="autostart_enabled"><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <div class="settings-page" data-page="ftp">
+        <div class="switch-row"><div class="label">FTP 서버 사용</div><label class="switch"><input type="checkbox" id="ftp_enabled"><span class="slider"></span></label></div>
+        <div class="form-row" style="margin-top:14px;">
+          <div class="field"><label>리슨 주소 (host:port)</label><input id="ftp_listen" type="text"></div>
+          <div class="field"><label>최대 동시 연결 수</label><input id="ftp_max_connections" type="number" min="1"></div>
+        </div>
+        <div class="form-row" style="margin-top:14px;">
+          <div class="field"><label>패시브 포트 시작</label><input id="ftp_passive_lo" type="number" min="1" max="65535"></div>
+          <div class="field"><label>패시브 포트 끝</label><input id="ftp_passive_hi" type="number" min="1" max="65535"></div>
+        </div>
+        <div class="switch-row" style="margin-top:14px;"><div class="label">익명 접속 허용</div><label class="switch"><input type="checkbox" id="ftp_allow_anonymous"><span class="slider"></span></label></div>
+        <div class="field" style="margin-top:10px;">
+          <label>익명 홈 디렉터리</label>
+          <div class="path-row">
+            <input id="ftp_anonymous_home_dir" type="text">
+            <button type="button" class="btn" data-browse="ftp_anonymous_home_dir">폴더 찾기</button>
+          </div>
+        </div>
+        <div class="switch-row" style="margin-top:14px;"><div class="label">TLS(FTPS) 사용</div><label class="switch"><input type="checkbox" id="ftp_tls_enabled"><span class="slider"></span></label></div>
+        <div class="form-row" style="margin-top:10px;">
+          <div class="field"><label>TLS 인증서 파일</label><input id="ftp_tls_cert" type="text"></div>
+          <div class="field"><label>TLS 키 파일</label><input id="ftp_tls_key" type="text"></div>
+        </div>
+
+        <div class="section-title">접속 허용 IP 대역 (화이트리스트)</div>
+        <div class="field">
+          <label>허용할 CIDR 대역 (한 줄에 하나, 비워두면 전체 허용)</label>
+          <textarea id="ftp_ip_allowlist" rows="3" placeholder="예: 192.168.0.0/24"></textarea>
+        </div>
+
+        <div class="section-title">FTP 계정</div>
+        <div id="ftp-user-list"></div>
+        <button type="button" class="btn small" id="ftp-user-add">+ 계정 추가</button>
+      </div>
+
+      <div class="settings-page" data-page="tftp">
+        <div class="switch-row"><div class="label">TFTP 서버 사용</div><label class="switch"><input type="checkbox" id="tftp_enabled"><span class="slider"></span></label></div>
+        <div class="field" style="margin-top:14px;"><label>리슨 주소 (host:port)</label><input id="tftp_listen" type="text"></div>
+        <div class="field">
+          <label>루트 폴더</label>
+          <div class="path-row">
+            <input id="tftp_root_dir" type="text">
+            <button type="button" class="btn" data-browse="tftp_root_dir">폴더 찾기</button>
+          </div>
+        </div>
+        <div class="switch-row"><div class="label">다운로드(RRQ) 허용</div><label class="switch"><input type="checkbox" id="tftp_allow_read"><span class="slider"></span></label></div>
+        <div class="switch-row"><div class="label">업로드(WRQ) 허용</div><label class="switch"><input type="checkbox" id="tftp_allow_write"><span class="slider"></span></label></div>
+        <div class="field" style="margin-top:10px;"><label>최대 블록 크기 (8~65464)</label><input id="tftp_max_blksize" type="number" min="8" max="65464"></div>
+      </div>
+
+      <div class="settings-page" data-page="syslog">
+        <div class="switch-row"><div class="label">Syslog 서버 사용</div><label class="switch"><input type="checkbox" id="syslog_enabled"><span class="slider"></span></label></div>
+        <div class="form-row" style="margin-top:14px;">
+          <div class="field"><label>UDP 리슨 주소</label><input id="syslog_udp_listen" type="text"></div>
+          <div class="field"><label>TCP 리슨 주소 (비워두면 비활성)</label><input id="syslog_tcp_listen" type="text"></div>
+        </div>
+        <div class="field" style="margin-top:14px;">
+          <label>로그 폴더</label>
+          <div class="path-row">
+            <input id="syslog_log_dir" type="text">
+            <button type="button" class="btn" data-browse="syslog_log_dir">폴더 찾기</button>
+          </div>
+        </div>
+        <div class="form-row" style="margin-top:14px;">
+          <div class="field"><label>로그 파일 최대 크기 (MB)</label><input id="syslog_max_size_mb" type="number" min="1"></div>
+          <div class="field"><label>로그 보관 기간 (일)</label><input id="syslog_max_age_day" type="number" min="0"></div>
+        </div>
+        <div class="switch-row" style="margin-top:14px;"><div class="label">오래된 로그 압축</div><label class="switch"><input type="checkbox" id="syslog_compress"><span class="slider"></span></label></div>
+        <div class="switch-row"><div class="label">TLS 사용 (TCP)</div><label class="switch"><input type="checkbox" id="syslog_tls_enabled"><span class="slider"></span></label></div>
+        <div class="form-row" style="margin-top:10px;">
+          <div class="field"><label>TLS 인증서 파일</label><input id="syslog_tls_cert" type="text"></div>
+          <div class="field"><label>TLS 키 파일</label><input id="syslog_tls_key" type="text"></div>
+        </div>
+
+        <div class="section-title">접속 허용 IP 대역 (화이트리스트)</div>
+        <div class="field">
+          <label>허용할 CIDR 대역 (한 줄에 하나, 비워두면 전체 허용)</label>
+          <textarea id="syslog_ip_allowlist" rows="3" placeholder="예: 192.168.0.0/24"></textarea>
+        </div>
+      </div>
+
+      <div class="settings-page" data-page="web">
+        <div class="switch-row"><div class="label">Web 사용</div><label class="switch"><input type="checkbox" id="web_enabled"><span class="slider"></span></label></div>
+        <div class="field" style="margin-top:14px;"><label>리슨 주소 (host:port)</label><input id="web_listen" type="text"></div>
+        <div class="section-title">관리자 계정</div>
+        <div class="form-row">
+          <div class="field"><label>사용자 이름</label><input id="web_username" type="text"></div>
+          <div class="field"><label>비밀번호 (변경하려면 입력)</label><input id="web_new_password" type="password" autocomplete="new-password"></div>
+        </div>
+
+        <div class="section-title">접속 허용 IP 대역 (화이트리스트)</div>
+        <div class="field">
+          <label>허용할 CIDR 대역 (한 줄에 하나, 비워두면 전체 허용)</label>
+          <textarea id="web_ip_allowlist" rows="3" placeholder="예: 192.168.0.0/24"></textarea>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:8px; margin-top:24px;">
+        <button type="button" class="btn primary" id="save-btn">저장</button>
+        <a class="btn" href="/">취소</a>
+      </div>
+    </form>
+  </main>
+</div>
+
+<div class="modal-overlay" id="user-modal-overlay">
+  <div class="modal">
+    <h3 id="user-modal-title">FTP 계정 추가</h3>
+    <input type="hidden" id="user-modal-index" value="-1">
+    <div class="field"><label>사용자 이름</label><input id="user-modal-username" type="text"></div>
+    <div class="field"><label id="user-modal-pw-label">비밀번호</label><input id="user-modal-password" type="password" autocomplete="new-password"></div>
+    <div class="field">
+      <label>홈 디렉터리</label>
+      <div class="path-row">
+        <input id="user-modal-homedir" type="text">
+        <button type="button" class="btn" data-browse="user-modal-homedir">폴더 찾기</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>권한</label>
+      <div class="perm-grid" id="user-modal-perm-grid"></div>
+    </div>
+    <div style="display:flex; gap:8px;">
+      <button type="button" class="btn small" id="user-modal-full">전체 권한</button>
+      <button type="button" class="btn small" id="user-modal-ro">읽기 전용</button>
+    </div>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="user-modal-cancel">취소</button>
+      <button type="button" class="btn primary" id="user-modal-ok">확인</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="browse-modal-overlay">
+  <div class="modal wide">
+    <h3>폴더 찾기</h3>
+    <div class="drive-chips" id="browse-drives"></div>
+    <div class="browse-path" id="browse-current-path">-</div>
+    <div class="browse-list" id="browse-list"></div>
+    <div class="modal-actions">
+      <button type="button" class="btn" id="browse-up">상위 폴더</button>
+      <button type="button" class="btn" id="browse-cancel">취소</button>
+      <button type="button" class="btn primary" id="browse-select">이 폴더 선택</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/settings.js"></script>
+</body>
+</html>
+{{end}}

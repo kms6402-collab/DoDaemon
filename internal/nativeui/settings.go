@@ -37,11 +37,13 @@ const permsReadOnly = "lr"
 
 // browseFolder opens the native "폴더 찾기" dialog seeded at edit's current
 // text and writes the chosen path back into it — the native-GUI equivalent
-// of the web UI's /api/browse modal (internal/webui/browse.go).
+// of the web UI's /api/browse modal (internal/webui/browse.go). Uses our
+// own browseForFolder (browsefolder_windows.go) rather than lxn/walk's
+// FileDialog.ShowBrowseFolder, which locks navigation to whatever drive
+// the seed path is on — see that file's doc comment.
 func browseFolder(owner walk.Form, edit *walk.LineEdit) {
-	dlg := walk.FileDialog{Title: "폴더 찾기", InitialDirPath: edit.Text()}
-	if ok, err := dlg.ShowBrowseFolder(owner); err == nil && ok {
-		edit.SetText(dlg.FilePath)
+	if path, ok := browseForFolder(owner.Handle(), "폴더 찾기", edit.Text()); ok {
+		edit.SetText(path)
 	}
 }
 

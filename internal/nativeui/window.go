@@ -409,16 +409,28 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		}
 	})
 
+	// Every custom Composite+Label "button" (real PushButtons already show
+	// the OS's own clickable chrome, but these can't — see btnPowerBox's
+	// doc comment) gets an explicit hand cursor so hovering makes it
+	// obvious they're clickable, not just static text/panels.
+	hand := walk.CursorHand()
 	for key, nw := range w.nav {
 		key := key
 		nw.container.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.selectService(key) })
 		nw.nameLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.selectService(key) })
 		nw.protoLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.selectService(key) })
+		nw.container.SetCursor(hand)
+		nw.nameLbl.SetCursor(hand)
+		nw.protoLbl.SetCursor(hand)
 	}
 	w.btnPowerBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onPowerToggle() })
 	w.btnPowerLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onPowerToggle() })
+	w.btnPowerBox.SetCursor(hand)
+	w.btnPowerLbl.SetCursor(hand)
 	w.autoscrollBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.toggleAutoscroll() })
 	w.autoscrollLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.toggleAutoscroll() })
+	w.autoscrollBox.SetCursor(hand)
+	w.autoscrollLbl.SetCursor(hand)
 
 	ch, unsub := bus.Subscribe(256)
 	w.unsubscribe = unsub
@@ -814,19 +826,18 @@ func (w *Window) onDirOpen() {
 func (w *Window) onDirChange() {
 	cfg := w.cfg.Load()
 	_, _, _, _, dir := serviceMeta(cfg, w.selected)
-	dlg := walk.FileDialog{Title: "폴더 찾기", InitialDirPath: dir}
-	ok, err := dlg.ShowBrowseFolder(w.mw)
-	if err != nil || !ok || dlg.FilePath == "" {
+	path, ok := browseForFolder(w.mw.Handle(), "폴더 찾기", dir)
+	if !ok || path == "" {
 		return
 	}
 	w.applyConfigChange(func(c *config.Config) {
 		switch w.selected {
 		case "tftp":
-			c.TFTP.RootDir = dlg.FilePath
+			c.TFTP.RootDir = path
 		case "ftp":
-			c.FTP.AnonymousHomeDir = dlg.FilePath
+			c.FTP.AnonymousHomeDir = path
 		case "syslog":
-			c.Syslog.LogDir = dlg.FilePath
+			c.Syslog.LogDir = path
 		}
 	})
 }

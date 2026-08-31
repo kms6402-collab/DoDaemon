@@ -72,6 +72,11 @@
           <div class="field"><label>TLS 키 파일</label><input id="ftp_tls_key" type="text"></div>
         </div>
 
+        <div class="switch-row" style="margin-top:14px;"><div class="label">SFTP 사용 (FTP 계정·권한·IP 허용목록 공유)</div><label class="switch"><input type="checkbox" id="ftp_sftp_enabled"><span class="slider"></span></label></div>
+        <div class="form-row" style="margin-top:10px;">
+          <div class="field"><label>SFTP 리슨 주소 (host:port)</label><input id="ftp_sftp_listen" type="text"></div>
+        </div>
+
         <div class="section-title">접속 허용 IP 대역 (화이트리스트)</div>
         <div class="field">
           <label>허용할 CIDR 대역 (한 줄에 하나, 비워두면 전체 허용)</label>

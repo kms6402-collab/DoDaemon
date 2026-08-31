@@ -132,6 +132,8 @@ const maxRawEvents = 1000
 // closes it, by the X button or the 종료 button alike — the caller uses it
 // to trigger the app's own graceful shutdown.
 func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClose func()) (*Window, error) {
+	loadEmbeddedFonts()
+
 	w := &Window{
 		tracker:      newActiveTracker(),
 		activeModel:  &activeTableModel{},
@@ -153,11 +155,11 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 	}
 	w.icon = icon
 
-	baseFont := Font{Family: "Segoe UI", PointSize: 9}
-	titleFont := Font{Family: "Segoe UI", PointSize: 9, Bold: true}
+	baseFont := Font{Family: fontFamily, PointSize: 9}
+	titleFont := Font{Family: fontFamily, PointSize: 9, Bold: true}
 
 	navChildren := make([]Widget, 0, len(navOrder)+4)
-	navChildren = append(navChildren, Label{Text: "서비스", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorFaint})
+	navChildren = append(navChildren, Label{Text: "서비스", Font: Font{Family: fontFamily, PointSize: 8, Bold: true}, TextColor: colorFaint})
 	for _, ne := range navOrder {
 		ne := ne
 		nw := &navWidgets{}
@@ -167,16 +169,16 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 			Background: SolidColorBrush{Color: colorCardBG},
 			Layout:     HBox{Margins: Margins{Left: 8, Top: 7, Right: 8, Bottom: 7}, Spacing: 6},
 			Children: []Widget{
-				Label{AssignTo: &nw.dot, Text: "■", TextColor: colorFaint, Font: Font{Family: "Segoe UI", PointSize: 9}},
+				Label{AssignTo: &nw.dot, Text: "■", TextColor: colorFaint, Font: Font{Family: fontFamily, PointSize: 9}},
 				Composite{
 					Layout: VBox{MarginsZero: true, SpacingZero: true},
 					Children: []Widget{
-						Label{AssignTo: &nw.nameLbl, Text: ne.name, Font: Font{Family: "Segoe UI", PointSize: 9, Bold: true}},
-						Label{AssignTo: &nw.protoLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
+						Label{AssignTo: &nw.nameLbl, Text: ne.name, Font: Font{Family: fontFamily, PointSize: 9, Bold: true}},
+						Label{AssignTo: &nw.protoLbl, Text: "-", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorFaint},
 					},
 				},
 				HSpacer{},
-				Label{AssignTo: &nw.rateLbl, Text: "—", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorDim},
+				Label{AssignTo: &nw.rateLbl, Text: "—", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorDim},
 			},
 		})
 	}
@@ -194,8 +196,8 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 			AssignTo: &w.dirSection,
 			Layout:   VBox{MarginsZero: true, Spacing: 4},
 			Children: []Widget{
-				Label{Text: "디렉터리", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorFaint},
-				Label{AssignTo: &w.dirPathLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorText},
+				Label{Text: "디렉터리", Font: Font{Family: fontFamily, PointSize: 8, Bold: true}, TextColor: colorFaint},
+				Label{AssignTo: &w.dirPathLbl, Text: "-", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorText},
 				Composite{
 					Layout: HBox{MarginsZero: true, Spacing: 6},
 					Children: []Widget{
@@ -208,7 +210,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		Composite{
 			AssignTo: &w.permSection,
 			Layout:   VBox{MarginsZero: true, Spacing: 2},
-			Children: append([]Widget{Label{Text: "권한", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorFaint}}, permWidgets...),
+			Children: append([]Widget{Label{Text: "권한", Font: Font{Family: fontFamily, PointSize: 8, Bold: true}, TextColor: colorFaint}}, permWidgets...),
 		},
 		VSpacer{},
 		PushButton{Text: "⚙ 설정", OnClicked: w.openSettings},
@@ -222,10 +224,12 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		Icon:       icon,
 		Font:       baseFont,
 		Background: SolidColorBrush{Color: colorPageBG},
-		// Default 1024x720, min 800x600 — docs/tftp_daemon_console_spec.pdf
-		// §4 Task 1's exact window sizing requirement.
+		// Min 800x600 per docs/tftp_daemon_console_spec.pdf §4 Task 1 (the
+		// window is still resizable down to that). Default width widened
+		// from the spec's 1024 to 1240 so 진행 중인 전송's six columns fit
+		// without a horizontal scrollbar at first launch.
 		MinSize: Size{Width: 800, Height: 600},
-		Size:    Size{Width: 1024, Height: 720},
+		Size:    Size{Width: 1240, Height: 760},
 		Layout:  VBox{MarginsZero: true, SpacingZero: true},
 		Children: []Widget{
 			Composite{
@@ -233,13 +237,13 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 				MaxSize:    Size{Height: 34},
 				Layout:     HBox{Margins: Margins{Left: 14, Top: 6, Right: 14, Bottom: 6}, Spacing: 8},
 				Children: []Widget{
-					Label{Text: "□", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
-					Label{Text: "□", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
-					Label{Text: "□", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
-					Label{Text: "DoDaeMon", Font: Font{Family: "Segoe UI", PointSize: 10, Bold: true}},
-					Label{Text: "TFTP · FTP · SYSLOG · WEB 서버 콘솔", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
+					Label{Text: "□", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorFaint},
+					Label{Text: "□", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorFaint},
+					Label{Text: "□", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorFaint},
+					Label{Text: "DoDaeMon", Font: Font{Family: fontFamily, PointSize: 10, Bold: true}},
+					Label{Text: "TFTP · FTP · SYSLOG · WEB 서버 콘솔", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorFaint},
 					HSpacer{},
-					Label{AssignTo: &w.clockLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorDim},
+					Label{AssignTo: &w.clockLbl, Text: "-", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorDim},
 				},
 			},
 			Composite{
@@ -258,15 +262,15 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 						Background:    SolidColorBrush{Color: colorCardBG},
 						Layout:        VBox{Margins: Margins{Left: 24, Top: 16, Right: 28, Bottom: 16}, Spacing: 10},
 						Children: []Widget{
-							Label{Text: "패킷 서비스", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorAccent},
+							Label{Text: "패킷 서비스", Font: Font{Family: fontFamily, PointSize: 8, Bold: true}, TextColor: colorAccent},
 							Composite{
 								Layout: HBox{MarginsZero: true},
 								Children: []Widget{
 									Composite{
 										Layout: VBox{MarginsZero: true, SpacingZero: true},
 										Children: []Widget{
-											Label{AssignTo: &w.titleLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 16, Bold: true}},
-											Label{AssignTo: &w.metaLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 9}, TextColor: colorDim},
+											Label{AssignTo: &w.titleLbl, Text: "-", Font: Font{Family: fontFamily, PointSize: 16, Bold: true}},
+											Label{AssignTo: &w.metaLbl, Text: "-", Font: Font{Family: fontFamily, PointSize: 9}, TextColor: colorDim},
 										},
 									},
 									HSpacer{},
@@ -275,7 +279,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										Background: SolidColorBrush{Color: colorSidebarBG},
 										Layout:     HBox{Margins: Margins{Left: 10, Top: 4, Right: 10, Bottom: 4}, MarginsZero: false},
 										Children: []Widget{
-											Label{AssignTo: &w.statusBadge, Text: "확인 중", Font: Font{Family: "Segoe UI", PointSize: 8, Bold: true}, TextColor: colorDim},
+											Label{AssignTo: &w.statusBadge, Text: "확인 중", Font: Font{Family: fontFamily, PointSize: 8, Bold: true}, TextColor: colorDim},
 										},
 									},
 									PushButton{AssignTo: &w.btnRestart, Text: "재시작", OnClicked: w.onRestart},
@@ -292,7 +296,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										AssignTo: &w.btnPowerBox,
 										Layout:   HBox{Margins: Margins{Left: 14, Top: 5, Right: 14, Bottom: 5}},
 										Children: []Widget{
-											Label{AssignTo: &w.btnPowerLbl, Text: "시작", TextColor: walk.RGB(0xff, 0xff, 0xff), Font: Font{Family: "Segoe UI", PointSize: 9}},
+											Label{AssignTo: &w.btnPowerLbl, Text: "시작", TextColor: walk.RGB(0xff, 0xff, 0xff), Font: Font{Family: fontFamily, PointSize: 9}},
 										},
 									},
 								},
@@ -317,7 +321,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										LastColumnStretched: true,
 										MinSize:             Size{Height: 130},
 										MaxSize:             Size{Height: 130},
-										Font:                Font{Family: "Consolas", PointSize: 9},
+										Font:                Font{Family: fontFamily, PointSize: 9},
 										Columns: []TableViewColumn{
 											{Title: "파일", Width: 200},
 											{Title: "클라이언트", Width: 110},
@@ -352,9 +356,16 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 											Composite{
 												AssignTo:   &w.autoscrollBox,
 												Background: SolidColorBrush{Color: colorTermBGElevated},
-												Layout:     HBox{Margins: Margins{Left: 10, Top: 4, Right: 10, Bottom: 4}},
+												// A generous fixed MinSize (rather than shrink-to-
+												// content) guarantees the painted pill and the
+												// clickable Composite bounds are the same rectangle
+												// — the previous content-fit sizing let the two
+												// drift apart enough that only the pill's right
+												// edge actually registered clicks.
+												MinSize: Size{Width: 150, Height: 26},
+												Layout:  HBox{Margins: Margins{Left: 10, Top: 4, Right: 10, Bottom: 4}, Alignment: AlignHCenterVCenter},
 												Children: []Widget{
-													Label{AssignTo: &w.autoscrollLbl, Text: "자동 스크롤 켜짐", TextColor: colorTermText, Font: Font{Family: "Segoe UI", PointSize: 8}},
+													Label{AssignTo: &w.autoscrollLbl, Text: "자동 스크롤 켜짐", TextColor: colorTermText, Font: Font{Family: fontFamily, PointSize: 8}},
 												},
 											},
 										},
@@ -366,7 +377,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										StretchFactor:       1,
 										HeaderHidden:        true,
 										Background:          SolidColorBrush{Color: colorTermBG},
-										Font:                Font{Family: "Consolas", PointSize: 9},
+										Font:                Font{Family: fontFamily, PointSize: 9},
 										Columns: []TableViewColumn{
 											{Title: "시간", Width: 80},
 											{Title: "소스", Width: 70},
@@ -385,10 +396,10 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 				MaxSize:    Size{Height: 26},
 				Layout:     HBox{Margins: Margins{Left: 14, Top: 4, Right: 14, Bottom: 4}, Spacing: 12},
 				Children: []Widget{
-					Label{AssignTo: &w.fbStatusLbl, Text: "-", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
+					Label{AssignTo: &w.fbStatusLbl, Text: "-", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorFaint},
 					HSpacer{},
-					Label{AssignTo: &w.fbRxLbl, Text: "RX 0 B", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
-					Label{AssignTo: &w.fbTxLbl, Text: "TX 0 B", Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorFaint},
+					Label{AssignTo: &w.fbRxLbl, Text: "RX 0 B", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorFaint},
+					Label{AssignTo: &w.fbTxLbl, Text: "TX 0 B", Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorFaint},
 				},
 			},
 		},
@@ -449,8 +460,8 @@ func kpiTile(assign **walk.Label, label string) Composite {
 		StretchFactor: 1,
 		Layout:        VBox{MarginsZero: true, SpacingZero: true},
 		Children: []Widget{
-			Label{AssignTo: assign, Text: "0", Font: Font{Family: "Segoe UI", PointSize: 16, Bold: true}},
-			Label{Text: label, Font: Font{Family: "Segoe UI", PointSize: 8}, TextColor: colorDim},
+			Label{AssignTo: assign, Text: "0", Font: Font{Family: fontFamily, PointSize: 16, Bold: true}},
+			Label{Text: label, Font: Font{Family: fontFamily, PointSize: 8}, TextColor: colorDim},
 		},
 	}
 }
@@ -927,12 +938,24 @@ func serviceMeta(cfg *config.Config, key string) (enabled bool, protocol, listen
 
 	case "ftp":
 		_, port := splitAddr(cfg.FTP.Listen)
+		// AnonymousHomeDir is FTP's own general/default files directory
+		// (mirroring TFTP's root_dir); a per-user home dir is a different,
+		// per-account thing, not "the FTP directory" — so it's not used as
+		// a substitute here. When AnonymousHomeDir hasn't been set yet
+		// (a freshly enabled FTP server), the sidebar quick-editor still
+		// needs a value to show and let 변경 create — defaulting to
+		// ./data/ftp (same convention as TFTP's ./data/tftp) rather than
+		// "" avoids hiding the directory panel entirely on first enable.
 		dir := cfg.FTP.AnonymousHomeDir
-		if dir == "" && len(cfg.FTP.Users) > 0 {
-			dir = cfg.FTP.Users[0].HomeDir
+		if dir == "" {
+			dir = "./data/ftp"
 		}
-		return cfg.FTP.Enabled, "TCP " + port, cfg.FTP.Listen,
-			fmt.Sprintf("tcp/%s · 패시브 %d-%d · 계정 %d개", port, cfg.FTP.PassivePortRange[0], cfg.FTP.PassivePortRange[1], len(cfg.FTP.Users)), dir
+		ftpMeta := fmt.Sprintf("tcp/%s · 패시브 %d-%d · 계정 %d개", port, cfg.FTP.PassivePortRange[0], cfg.FTP.PassivePortRange[1], len(cfg.FTP.Users))
+		if cfg.FTP.SFTPEnabled {
+			_, sftpPort := splitAddr(cfg.FTP.SFTPListen)
+			ftpMeta += fmt.Sprintf(" · SFTP %s", sftpPort)
+		}
+		return cfg.FTP.Enabled, "TCP " + port, cfg.FTP.Listen, ftpMeta, dir
 
 	case "syslog":
 		addr := cfg.Syslog.UDPListen

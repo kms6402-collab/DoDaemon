@@ -57,6 +57,12 @@ type FTPConfig struct {
 	Users            []FTPUser `yaml:"users"`
 	MaxConnections   int       `yaml:"max_connections"`
 	IPAllowlist      []string  `yaml:"ip_allowlist"`
+
+	// SFTP shares the FTP account list/permissions/IP allowlist above — it's
+	// presented as a sub-feature of "FTP" in both UIs, not a separate
+	// service, rather than a fully independent 5th protocol server.
+	SFTPEnabled bool   `yaml:"sftp_enabled"`
+	SFTPListen  string `yaml:"sftp_listen"`
 }
 
 type TFTPConfig struct {
@@ -113,6 +119,11 @@ func Default() *Config {
 			PassivePortRange: [2]int{50000, 50100},
 			AllowAnonymous:   false,
 			MaxConnections:   100,
+			SFTPEnabled:      false,
+			// 22 is the conventional SSH port, but a real OpenSSH server is
+			// often already running there (including on Windows Server) —
+			// defaulting elsewhere avoids a bind conflict out of the box.
+			SFTPListen: "0.0.0.0:2222",
 		},
 		TFTP: TFTPConfig{
 			Enabled:    false,
@@ -200,6 +211,14 @@ func (c *Config) Validate() error {
 		}
 		if err := validateCIDRList("ftp.ip_allowlist", c.FTP.IPAllowlist); err != nil {
 			return err
+		}
+		if c.FTP.SFTPEnabled {
+			if err := validateListenAddr("ftp.sftp_listen", c.FTP.SFTPListen); err != nil {
+				return err
+			}
+			if c.FTP.SFTPListen == c.FTP.Listen {
+				return fmt.Errorf("ftp.sftp_listen must differ from ftp.listen")
+			}
 		}
 	}
 

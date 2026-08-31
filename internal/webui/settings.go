@@ -58,6 +58,8 @@ type settingsDTO struct {
 	FTPTLSEnabled       bool         `json:"ftp_tls_enabled"`
 	FTPTLSCert          string       `json:"ftp_tls_cert"`
 	FTPTLSKey           string       `json:"ftp_tls_key"`
+	FTPSFTPEnabled      bool         `json:"ftp_sftp_enabled"`
+	FTPSFTPListen       string       `json:"ftp_sftp_listen"`
 	FTPUsers            []ftpUserDTO `json:"ftp_users"`
 	FTPIPAllowlist      []string     `json:"ftp_ip_allowlist"`
 
@@ -110,6 +112,8 @@ func toDTO(cfg *config.Config) settingsDTO {
 		FTPTLSEnabled:       cfg.FTP.TLS.Enabled,
 		FTPTLSCert:          cfg.FTP.TLS.CertFile,
 		FTPTLSKey:           cfg.FTP.TLS.KeyFile,
+		FTPSFTPEnabled:      cfg.FTP.SFTPEnabled,
+		FTPSFTPListen:       cfg.FTP.SFTPListen,
 		FTPUsers:            users,
 		FTPIPAllowlist:      cfg.FTP.IPAllowlist,
 
@@ -162,6 +166,8 @@ func applyDTO(base *config.Config, dto settingsDTO) (config.Config, error) {
 	newCfg.FTP.TLS.Enabled = dto.FTPTLSEnabled
 	newCfg.FTP.TLS.CertFile = dto.FTPTLSCert
 	newCfg.FTP.TLS.KeyFile = dto.FTPTLSKey
+	newCfg.FTP.SFTPEnabled = dto.FTPSFTPEnabled
+	newCfg.FTP.SFTPListen = dto.FTPSFTPListen
 	newCfg.FTP.IPAllowlist = cleanList(dto.FTPIPAllowlist)
 
 	existingHash := make(map[string]string, len(base.FTP.Users))

@@ -235,6 +235,8 @@
         setField("ftp_tls_enabled", dto.ftp_tls_enabled);
         setField("ftp_tls_cert", dto.ftp_tls_cert);
         setField("ftp_tls_key", dto.ftp_tls_key);
+        setField("ftp_sftp_enabled", dto.ftp_sftp_enabled);
+        setField("ftp_sftp_listen", dto.ftp_sftp_listen);
         setList("ftp_ip_allowlist", dto.ftp_ip_allowlist);
         users = (dto.ftp_users || []).map((u) => ({ username: u.username, home_dir: u.home_dir, permissions: u.permissions || [], new_password: "" }));
         renderUsers();
@@ -282,6 +284,8 @@
       ftp_tls_enabled: getField("ftp_tls_enabled"),
       ftp_tls_cert: getField("ftp_tls_cert"),
       ftp_tls_key: getField("ftp_tls_key"),
+      ftp_sftp_enabled: getField("ftp_sftp_enabled"),
+      ftp_sftp_listen: getField("ftp_sftp_listen"),
       ftp_ip_allowlist: getList("ftp_ip_allowlist"),
       ftp_users: users,
 

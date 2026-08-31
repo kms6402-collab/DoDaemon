@@ -16,10 +16,10 @@
 # to regenerate rsrc_windows_amd64.syso (go-winres: go install github.com/tc-hib/go-winres@latest)
 # before rebuilding, so the exe's icon/version resource matches.
 #
-# Usage: powershell -File scripts/build.ps1 [-Version "2.4.1"]
+# Usage: powershell -File scripts/build.ps1 [-Version "2.5.0"]
 
 param(
-    [string]$Version = "2.4.1"
+    [string]$Version = "2.5.0"
 )
 
 $ErrorActionPreference = "Stop"

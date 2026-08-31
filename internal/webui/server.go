@@ -196,9 +196,23 @@ func (s *Server) buildServices() []serviceInfo {
 		permMode = "wo"
 	}
 
+	// AnonymousHomeDir is FTP's own general/default files directory
+	// (mirroring TFTP's root_dir); a per-user home dir is a different,
+	// per-account thing, so it's not used as a substitute. When
+	// AnonymousHomeDir hasn't been set yet (a freshly enabled FTP
+	// server), the sidebar quick-editor still needs a value to show and
+	// let 변경 create — defaulting to ./data/ftp rather than "" avoids
+	// hiding the directory panel entirely on first enable (it was
+	// hidden whenever Dir is falsy, see static/app.js's renderDirPanel).
 	ftpDir := cfg.FTP.AnonymousHomeDir
-	if ftpDir == "" && len(cfg.FTP.Users) > 0 {
-		ftpDir = cfg.FTP.Users[0].HomeDir
+	if ftpDir == "" {
+		ftpDir = "./data/ftp"
+	}
+
+	ftpMeta := fmt.Sprintf("tcp/%s · 패시브 %d-%d · 계정 %d개", ftpPort, cfg.FTP.PassivePortRange[0], cfg.FTP.PassivePortRange[1], len(cfg.FTP.Users))
+	if cfg.FTP.SFTPEnabled {
+		_, sftpPort := splitAddr(cfg.FTP.SFTPListen)
+		ftpMeta += fmt.Sprintf(" · SFTP %s", sftpPort)
 	}
 
 	return []serviceInfo{
@@ -212,7 +226,7 @@ func (s *Server) buildServices() []serviceInfo {
 		{
 			Key: "ftp", Name: "FTP 서버", Enabled: cfg.FTP.Enabled,
 			Protocol: "TCP " + ftpPort, Listen: cfg.FTP.Listen,
-			Meta: fmt.Sprintf("tcp/%s · 패시브 %d-%d · 계정 %d개", ftpPort, cfg.FTP.PassivePortRange[0], cfg.FTP.PassivePortRange[1], len(cfg.FTP.Users)),
+			Meta: ftpMeta,
 			Dir:  ftpDir,
 		},
 		{

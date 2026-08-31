@@ -20,6 +20,7 @@ import (
 	"github.com/kms6402/dodaemon/internal/nativeui"
 	"github.com/kms6402/dodaemon/internal/security"
 	"github.com/kms6402/dodaemon/internal/server"
+	sftpsrv "github.com/kms6402/dodaemon/internal/sftp"
 	"github.com/kms6402/dodaemon/internal/syslogsrv"
 	"github.com/kms6402/dodaemon/internal/tftp"
 	"github.com/kms6402/dodaemon/internal/webui"
@@ -176,6 +177,12 @@ func newRunFunc(absConfigPath string, bus *eventbus.Bus, onReload func(*config.C
 			sup.Add(ftpSrv)
 		}
 
+		var sftpSrv *sftpsrv.Server
+		if cfg.FTP.SFTPEnabled {
+			sftpSrv = sftpsrv.New(cfg.FTP, cfg.Server.DataDir, ftpACL, bus, logger)
+			sup.Add(sftpSrv)
+		}
+
 		var tftpSrv *tftp.Server
 		if cfg.TFTP.Enabled {
 			tftpSrv = tftp.New(cfg.TFTP, bus, logger)
@@ -236,6 +243,20 @@ func newRunFunc(absConfigPath string, bus *eventbus.Bus, onReload func(*config.C
 				ftpSrv = newFtpSrv
 			case newCfg.FTP.Enabled && ftpSrv != nil:
 				ftpSrv.UpdateConfig(newCfg.FTP, newFtpACL)
+			}
+
+			// SFTP: shares FTP's account list and ACL, but has no partial
+			// live-update path (no UpdateConfig on Server) -- any relevant
+			// change just rebuilds it, mirroring TFTP's own rebuild-on-any-
+			// change approach below.
+			switch {
+			case !newCfg.FTP.SFTPEnabled && sftpSrv != nil:
+				sup.Remove("sftp")
+				sftpSrv = nil
+			case newCfg.FTP.SFTPEnabled && (sftpSrv == nil || !reflect.DeepEqual(oldCfg.FTP, newCfg.FTP)):
+				newSftpSrv := sftpsrv.New(newCfg.FTP, newCfg.Server.DataDir, newFtpACL, bus, logger)
+				sup.Replace(newSftpSrv)
+				sftpSrv = newSftpSrv
 			}
 
 			// TFTP has no partial live-update path today: any change to an

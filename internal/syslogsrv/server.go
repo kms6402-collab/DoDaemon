@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/tls"
+	"errors"
 	"log/slog"
 	"net"
 	"sync"
@@ -91,7 +92,8 @@ func (s *Server) startUDP(ctx context.Context) error {
 		for {
 			n, remote, err := conn.ReadFromUDP(buf)
 			if err != nil {
-				if ctx.Err() != nil {
+				// A closed socket (Shutdown) must end the loop, not spin.
+				if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 					return
 				}
 				continue
@@ -138,7 +140,7 @@ func (s *Server) startTCP(ctx context.Context) error {
 		for {
 			conn, err := lis.Accept()
 			if err != nil {
-				if ctx.Err() != nil {
+				if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 					return
 				}
 				continue

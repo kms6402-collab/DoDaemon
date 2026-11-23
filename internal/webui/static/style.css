@@ -333,27 +333,31 @@ table.data-table td.speed, table.data-table td.remaining { font-family: var(--mo
 .log-row.severity-warn .log-msg { color: var(--term-warn); }
 .log-row.severity-err .log-msg { color: var(--term-err); }
 
+/* Every button uses the same filled-pill chrome as the 시작/정지 toggle
+   (see internal/nativeui/window.go's btnPowerBox, whose look this mirrors)
+   instead of a mix of outlined and filled buttons — modifier classes only
+   change the fill color, never the shape/weight. */
 .btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 8px 14px;
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-card);
-  color: var(--text);
+  border: 1px solid var(--stop-btn);
+  background: var(--stop-btn);
+  color: #fff;
   font-weight: 600;
   font-size: 13px;
   cursor: pointer;
 }
-.btn:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
-.btn.primary { background: var(--stop-btn); border-color: var(--stop-btn); color: #fff; }
+.btn:hover { text-decoration: none; opacity: 0.88; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.primary:hover { color: #fff; opacity: 0.92; }
-.btn.danger { border-color: var(--err); color: var(--err); }
-.btn.danger:hover { background: #fbe9e9; color: var(--err); }
+.btn.danger { background: var(--err); border-color: var(--err); color: #fff; }
+.btn.danger:hover { color: #fff; opacity: 0.88; }
 .btn.small { padding: 5px 10px; font-size: 12px; }
 .btn.ghost { background: var(--term-bg-elevated); border-color: var(--term-border); color: var(--term-dim); }
-.btn.ghost:hover { border-color: var(--term-info); color: var(--term-info); }
+.btn.ghost:hover { border-color: var(--term-info); color: var(--term-info); opacity: 1; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ---------- Login ---------- */

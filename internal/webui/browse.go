@@ -9,19 +9,24 @@ import (
 	"strings"
 )
 
-// handleBrowseAPI lists sub-directories of ?path= (folders only, no files)
-// so the settings page's "폴더 찾아보기" modal can navigate the server's
-// filesystem instead of the operator having to type an exact path by hand.
-// Gated behind requireAuth like every other /api route — this is local
-// admin tooling, not a public listing.
+// handleBrowseAPI lists the contents of ?path= so the settings page's
+// "폴더 찾기" modal can navigate the server's filesystem instead of the
+// operator having to type an exact path by hand. Files are only included
+// when ?files=1 is passed (folder-picker callers — the FTP/TFTP/syslog
+// directory fields — don't need or want to see files in the listing); the
+// modal switches into "pick a file" mode based on that same flag, used by
+// the TLS cert/key fields. Gated behind requireAuth like every other /api
+// route — this is local admin tooling, not a public listing.
 func (s *Server) handleBrowseAPI(w http.ResponseWriter, r *http.Request) {
 	reqPath := r.URL.Query().Get("path")
+	wantFiles := r.URL.Query().Get("files") == "1"
 
 	resp := struct {
 		Path   string   `json:"path"`
 		Parent string   `json:"parent"`
 		Drives []string `json:"drives"`
 		Dirs   []string `json:"dirs"`
+		Files  []string `json:"files,omitempty"`
 		Error  string   `json:"error,omitempty"`
 	}{Drives: listDrives()}
 
@@ -51,6 +56,7 @@ func (s *Server) handleBrowseAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	dirs := make([]string, 0, len(entries))
+	var files []string
 	for _, e := range entries {
 		name := e.Name()
 		if strings.HasPrefix(name, "$") { // skip Windows system dirs like $RECYCLE.BIN
@@ -65,11 +71,19 @@ func (s *Server) handleBrowseAPI(w http.ResponseWriter, r *http.Request) {
 		if e.Type()&os.ModeSymlink != 0 {
 			if fi, err := os.Stat(filepath.Join(abs, name)); err == nil && fi.IsDir() {
 				dirs = append(dirs, name)
+				continue
 			}
+		}
+		if wantFiles {
+			files = append(files, name)
 		}
 	}
 	sort.Strings(dirs)
 	resp.Dirs = dirs
+	if wantFiles {
+		sort.Strings(files)
+		resp.Files = files
+	}
 
 	writeJSON(w, resp)
 }

@@ -116,6 +116,23 @@ func TestValidate_Syslog(t *testing.T) {
 	}
 }
 
+func TestValidate_SyslogRotateDefaults(t *testing.T) {
+	cfg := Default()
+	cfg.Syslog.Enabled = true
+	cfg.Syslog.Rotate.MaxSizeMB = 0
+	cfg.Syslog.Rotate.MaxAgeDay = 0
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("zero rotate values should be floored, not rejected: %v", err)
+	}
+	if cfg.Syslog.Rotate.MaxSizeMB != 100 {
+		t.Errorf("MaxSizeMB = %d, want floored to 100", cfg.Syslog.Rotate.MaxSizeMB)
+	}
+	if cfg.Syslog.Rotate.MaxAgeDay != 30 {
+		t.Errorf("MaxAgeDay = %d, want floored to 30", cfg.Syslog.Rotate.MaxAgeDay)
+	}
+}
+
 func TestValidate_SecurityACLEntries(t *testing.T) {
 	cfg := Default()
 	cfg.FTP.Enabled = true

@@ -13,6 +13,7 @@ package nativeui
 import (
 	"fmt"
 	"net"
+	"os"
 	"os/exec"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,17 @@ var (
 	colorFaint     = walk.RGB(0x9a, 0xa0, 0xab) // --text-faint
 	colorText      = walk.RGB(0x14, 0x16, 0x1a) // --text
 	colorStopBtn   = walk.RGB(0x33, 0x41, 0x5c) // --stop-btn
+
+	// Every button in the app (native PushButton's Background is silently
+	// ignored under Windows visual styles — see btnPowerBox below) is a
+	// colored Composite+Label instead, built via styledButton. These three
+	// are that palette: accent for primary/confirm actions, neutral slate
+	// for secondary ones, red for destructive ones — matching
+	// static/style.css's .btn/.btn.primary/.btn.danger so the native and
+	// web button colors agree.
+	colorBtnNeutral = walk.RGB(0x64, 0x6c, 0x7a)
+	colorBtnDanger  = walk.RGB(0xd6, 0x3a, 0x3a)
+	colorBtnText    = walk.RGB(0xff, 0xff, 0xff)
 
 	// Dark terminal palette, used only by the event log panel — the exact
 	// console colors from docs/tftp_daemon_console_spec.pdf §4 Task 1
@@ -72,6 +84,14 @@ var navOrder = []navEntry{
 // an empty Composite's MinSize isn't reliably honored by walk's HBox
 // layout (it can collapse to zero width), whereas a Label always sizes
 // itself from its text content.
+// filterBtn is one of the four INFO/TRANSFER/WARN/ERROR log-level toggle
+// pills — a styledButton pair whose fill color is repainted on each click
+// by toggleLevelFilter, the same way btnPowerBox repaints itself.
+type filterBtn struct {
+	box *walk.Composite
+	lbl *walk.Label
+}
+
 type navWidgets struct {
 	container *walk.Composite
 	dot       *walk.Label
@@ -104,24 +124,29 @@ type Window struct {
 	selected     string
 	levelFilters map[string]bool // "info"/"transfer"/"warn"/"error" -> shown, independently toggleable (matches app.js)
 
-	titleLbl, metaLbl, statusBadge                    *walk.Label
-	statusBadgeBox                                    *walk.Composite
-	kpiActive, kpiCompleted, kpiThroughput            *walk.Label
-	kpiErrors                                         *walk.Label
-	btnRestart                                        *walk.PushButton
-	btnPowerBox                                       *walk.Composite
-	btnPowerLbl                                       *walk.Label
-	filterInfo, filterTransfer, filterWarn, filterErr *walk.PushButton
-	autoscrollBox                                     *walk.Composite
-	autoscrollLbl                                     *walk.Label
-	autoscrollOn                                      bool
-	logTableView                                      *walk.TableView
-	clockLbl                                          *walk.Label
-	fbStatusLbl, fbRxLbl, fbTxLbl                     *walk.Label
-	dirSection                                        *walk.Composite
-	dirPathLbl                                        *walk.Label
-	permSection                                       *walk.Composite
-	permRadios                                        map[string]*walk.RadioButton
+	titleLbl, metaLbl, statusBadge         *walk.Label
+	statusBadgeBox                         *walk.Composite
+	kpiActive, kpiCompleted, kpiThroughput *walk.Label
+	kpiErrors                              *walk.Label
+	btnRestartBox                          *walk.Composite
+	btnRestartLbl                          *walk.Label
+	btnPowerBox                            *walk.Composite
+	btnPowerLbl                            *walk.Label
+	filterBtns                             map[string]*filterBtn
+	autoscrollBox                          *walk.Composite
+	autoscrollLbl                          *walk.Label
+	autoscrollOn                           bool
+	logTableView                           *walk.TableView
+	clockLbl                               *walk.Label
+	fbStatusLbl, fbRxLbl, fbTxLbl          *walk.Label
+	dirSection                             *walk.Composite
+	dirPathLbl                             *walk.Label
+	dirChangeBox, dirOpenBox               *walk.Composite
+	dirChangeLbl, dirOpenLbl               *walk.Label
+	permSection                            *walk.Composite
+	permRadios                             map[string]*walk.RadioButton
+	settingsBox, dataDirBtnBox, quitBox    *walk.Composite
+	settingsLbl, dataDirBtnLbl, quitLbl    *walk.Label
 
 	unsubscribe func()
 }
@@ -143,6 +168,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		serverAddr:   localOutboundAddr(),
 		nav:          make(map[string]*navWidgets),
 		permRadios:   make(map[string]*walk.RadioButton),
+		filterBtns:   make(map[string]*filterBtn),
 		levelFilters: map[string]bool{"info": true, "transfer": true, "warn": true, "error": true},
 		autoscrollOn: true,
 	}
@@ -185,9 +211,9 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 
 	var rwRadio, roRadio, woRadio *walk.RadioButton
 	permWidgets := []Widget{
-		RadioButton{AssignTo: &rwRadio, Text: "읽기·쓰기 허용", OnClicked: func() { w.setTftpPermMode("rw") }},
-		RadioButton{AssignTo: &roRadio, Text: "읽기 전용", OnClicked: func() { w.setTftpPermMode("ro") }},
-		RadioButton{AssignTo: &woRadio, Text: "쓰기 전용", OnClicked: func() { w.setTftpPermMode("wo") }},
+		RadioButton{AssignTo: &rwRadio, Text: "읽기·쓰기 허용", Font: Font{Family: fontFamily, PointSize: 8}, OnClicked: func() { w.setTftpPermMode("rw") }},
+		RadioButton{AssignTo: &roRadio, Text: "읽기 전용", Font: Font{Family: fontFamily, PointSize: 8}, OnClicked: func() { w.setTftpPermMode("ro") }},
+		RadioButton{AssignTo: &woRadio, Text: "쓰기 전용", Font: Font{Family: fontFamily, PointSize: 8}, OnClicked: func() { w.setTftpPermMode("wo") }},
 	}
 
 	navChildren = append(navChildren,
@@ -201,8 +227,8 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 				Composite{
 					Layout: HBox{MarginsZero: true, Spacing: 6},
 					Children: []Widget{
-						PushButton{Text: "변경", OnClicked: w.onDirChange},
-						PushButton{Text: "열기", OnClicked: w.onDirOpen},
+						styledButton(&w.dirChangeBox, &w.dirChangeLbl, "변경", colorAccent),
+						styledButton(&w.dirOpenBox, &w.dirOpenLbl, "열기", colorBtnNeutral),
 					},
 				},
 			},
@@ -213,9 +239,9 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 			Children: append([]Widget{Label{Text: "권한", Font: Font{Family: fontFamily, PointSize: 8, Bold: true}, TextColor: colorFaint}}, permWidgets...),
 		},
 		VSpacer{},
-		PushButton{Text: "⚙ 설정", OnClicked: w.openSettings},
-		PushButton{Text: "데이터 폴더 열기", OnClicked: w.openDataDir},
-		PushButton{Text: "종료", OnClicked: func() { w.mw.Close() }},
+		styledButton(&w.settingsBox, &w.settingsLbl, "⚙ 설정", colorAccent),
+		styledButton(&w.dataDirBtnBox, &w.dataDirBtnLbl, "데이터 폴더 열기", colorBtnNeutral),
+		styledButton(&w.quitBox, &w.quitLbl, "종료", colorBtnNeutral),
 	)
 
 	err = MainWindow{
@@ -282,7 +308,7 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 											Label{AssignTo: &w.statusBadge, Text: "확인 중", Font: Font{Family: fontFamily, PointSize: 8, Bold: true}, TextColor: colorDim},
 										},
 									},
-									PushButton{AssignTo: &w.btnRestart, Text: "재시작", OnClicked: w.onRestart},
+									styledButton(&w.btnRestartBox, &w.btnRestartLbl, "재시작", colorBtnNeutral),
 									// A real PushButton ignores a plain Background brush under
 									// Win32 visual styles (would need BS_OWNERDRAW +
 									// WM_DRAWITEM to fill solid color), so the 시작/정지 toggle
@@ -344,10 +370,10 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 										Layout:     HBox{Margins: Margins{Left: 12, Top: 8, Right: 12, Bottom: 8}, Spacing: 6},
 										Children: []Widget{
 											Label{Text: "이벤트 로그", Font: titleFont, TextColor: colorTermText},
-											PushButton{AssignTo: &w.filterInfo, Text: "INFO", OnClicked: func() { w.toggleLevelFilter("info") }},
-											PushButton{AssignTo: &w.filterTransfer, Text: "TRANSFER", OnClicked: func() { w.toggleLevelFilter("transfer") }},
-											PushButton{AssignTo: &w.filterWarn, Text: "WARN", OnClicked: func() { w.toggleLevelFilter("warn") }},
-											PushButton{AssignTo: &w.filterErr, Text: "ERROR", OnClicked: func() { w.toggleLevelFilter("error") }},
+											filterPillWidget(w, "info", "INFO"),
+											filterPillWidget(w, "transfer", "TRANSFER"),
+											filterPillWidget(w, "warn", "WARN"),
+											filterPillWidget(w, "error", "ERROR"),
 											HSpacer{},
 											// A CheckBox's label text renders in the OS default
 											// (near-black) color, which is invisible against
@@ -434,14 +460,18 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 		nw.nameLbl.SetCursor(hand)
 		nw.protoLbl.SetCursor(hand)
 	}
-	w.btnPowerBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onPowerToggle() })
-	w.btnPowerLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.onPowerToggle() })
-	w.btnPowerBox.SetCursor(hand)
-	w.btnPowerLbl.SetCursor(hand)
-	w.autoscrollBox.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.toggleAutoscroll() })
-	w.autoscrollLbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { w.toggleAutoscroll() })
-	w.autoscrollBox.SetCursor(hand)
-	w.autoscrollLbl.SetCursor(hand)
+	wireButtonClick(w.btnPowerBox, w.btnPowerLbl, w.onPowerToggle)
+	wireButtonClick(w.autoscrollBox, w.autoscrollLbl, w.toggleAutoscroll)
+	wireButtonClick(w.btnRestartBox, w.btnRestartLbl, w.onRestart)
+	wireButtonClick(w.dirChangeBox, w.dirChangeLbl, w.onDirChange)
+	wireButtonClick(w.dirOpenBox, w.dirOpenLbl, w.onDirOpen)
+	wireButtonClick(w.settingsBox, w.settingsLbl, w.openSettings)
+	wireButtonClick(w.dataDirBtnBox, w.dataDirBtnLbl, w.openDataDir)
+	wireButtonClick(w.quitBox, w.quitLbl, func() { w.mw.Close() })
+	for level, fb := range w.filterBtns {
+		level := level
+		wireButtonClick(fb.box, fb.lbl, func() { w.toggleLevelFilter(level) })
+	}
 
 	ch, unsub := bus.Subscribe(256)
 	w.unsubscribe = unsub
@@ -453,6 +483,48 @@ func New(configPath string, initialCfg *config.Config, bus *eventbus.Bus, onClos
 	w.refreshDetail()
 
 	return w, nil
+}
+
+// styledButton returns a filled, clickable Composite+Label pair — every
+// button in this app uses this instead of walk.PushButton, whose
+// Background brush Windows silently ignores under visual styles (see
+// btnPowerBox's own doc comment, the pattern this generalizes). box/lbl
+// are populated once the declarative tree is Create()'d; the caller wires
+// the actual click behavior afterward via wireButtonClick, mirroring how
+// btnPowerBox and the autoscroll pill are already wired today.
+func styledButton(box **walk.Composite, lbl **walk.Label, text string, bg walk.Color) Widget {
+	return Composite{
+		AssignTo:   box,
+		Background: SolidColorBrush{Color: bg},
+		Layout:     HBox{Margins: Margins{Left: 12, Top: 6, Right: 12, Bottom: 6}, Alignment: AlignHCenterVCenter},
+		Children: []Widget{
+			Label{AssignTo: lbl, Text: text, TextColor: colorBtnText, Font: Font{Family: fontFamily, PointSize: 9}},
+		},
+	}
+}
+
+// wireButtonClick attaches onClick to both the box and its label (a click
+// anywhere on the pill must register, not just one half of it — see the
+// autoscroll-pill right-edge-only bug this pattern already had to fix
+// once) and gives the pair a hand cursor.
+func wireButtonClick(box *walk.Composite, lbl *walk.Label, onClick func()) {
+	box.MouseDown().Attach(func(x, y int, button walk.MouseButton) { onClick() })
+	lbl.MouseDown().Attach(func(x, y int, button walk.MouseButton) { onClick() })
+	hand := walk.CursorHand()
+	box.SetCursor(hand)
+	lbl.SetCursor(hand)
+}
+
+// filterPillWidget builds one INFO/TRANSFER/WARN/ERROR toggle pill and
+// registers its box/label into w.filterBtns[level] so toggleLevelFilter
+// can repaint it later — same styledButton shape as every other button,
+// but wired directly here (rather than through wireButtonClick after
+// Create) since its color also needs setting up front via
+// initLevelFilterButtons.
+func filterPillWidget(w *Window, level, text string) Widget {
+	fb := &filterBtn{}
+	w.filterBtns[level] = fb
+	return styledButton(&fb.box, &fb.lbl, text, colorTermBGElevated)
 }
 
 func kpiTile(assign **walk.Label, label string) Composite {
@@ -535,17 +607,32 @@ func (w *Window) selectService(key string) {
 	w.refreshDetail()
 }
 
-// initLevelFilterButtons paints all four filter buttons in their initial
+// initLevelFilterButtons paints all four filter pills in their initial
 // (all-active) state — levelFilters itself was already seeded all-true in
 // New(), this just makes the button chrome agree with that on first show.
 func (w *Window) initLevelFilterButtons() {
-	brush, err := walk.NewSolidColorBrush(colorCardBG)
-	if err != nil {
+	for level := range w.filterBtns {
+		w.paintFilterButton(level)
+	}
+}
+
+// paintFilterButton repaints one filter pill to match w.levelFilters: its
+// severity color (lit chip) when active, the dim elevated panel color when
+// not — matching internal/webui/static/style.css's .filter-pill.active
+// rules so the native and web filter chips read the same way.
+func (w *Window) paintFilterButton(level string) {
+	fb := w.filterBtns[level]
+	if fb == nil {
 		return
 	}
-	for _, btn := range []*walk.PushButton{w.filterInfo, w.filterTransfer, w.filterWarn, w.filterErr} {
-		btn.SetBackground(brush)
+	bg, fg := colorTermBGElevated, colorTermDim
+	if w.levelFilters[level] {
+		bg, fg = severityColor(level), colorTermBG
 	}
+	if brush, err := walk.NewSolidColorBrush(bg); err == nil {
+		fb.box.SetBackground(brush)
+	}
+	fb.lbl.SetTextColor(fg)
 }
 
 // toggleLevelFilter flips one severity's visibility independently of the
@@ -554,17 +641,7 @@ func (w *Window) initLevelFilterButtons() {
 // single-select radio group).
 func (w *Window) toggleLevelFilter(level string) {
 	w.levelFilters[level] = !w.levelFilters[level]
-
-	btn := map[string]*walk.PushButton{
-		"info": w.filterInfo, "transfer": w.filterTransfer, "warn": w.filterWarn, "error": w.filterErr,
-	}[level]
-	bg := colorTermBGElevated
-	if w.levelFilters[level] {
-		bg = colorCardBG
-	}
-	if brush, err := walk.NewSolidColorBrush(bg); err == nil {
-		btn.SetBackground(brush)
-	}
+	w.paintFilterButton(level)
 	w.rebuildLog()
 }
 
@@ -806,6 +883,7 @@ func (w *Window) refreshFooter() {
 
 func (w *Window) openDataDir() {
 	dir := w.cfg.Load().Server.DataDir
+	_ = os.MkdirAll(dir, 0o750) // "start" on a missing folder just shows an error box
 	exec.Command("cmd", "/c", "start", "", dir).Start()
 }
 

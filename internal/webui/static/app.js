@@ -395,7 +395,10 @@
         bytesDone: 0, bytesTotal: 0, speed: 0,
       });
     } else if (ev.kind === "disconnect") {
-      active.delete(ev.source + "|" + ev.remote_addr + "|");
+      // Also drop transfers left open by a session that died mid-transfer.
+      active.forEach((v, k) => {
+        if (v.source === ev.source && v.remoteAddr === ev.remote_addr) active.delete(k);
+      });
     } else if (ev.kind === "transfer" && isStart) {
       const m = msg.match(/(GET|PUT|다운로드|업로드)/);
       let direction = "GET";

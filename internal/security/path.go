@@ -22,6 +22,11 @@ var ErrPathEscapesRoot = errors.New("security: path escapes root directory")
 // path-traversal probe (see internal/tftp/session.go), so silently
 // containing it would erase the audit trail docs/PLAN.md §8.1 calls for.
 func SafeJoin(root, userPath string) (string, error) {
+	if root == "" {
+		// filepath.Abs("") is the working directory (the exe folder, with
+		// the config file in it) — never a sane share root.
+		return "", ErrPathEscapesRoot
+	}
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
@@ -40,7 +45,14 @@ func SafeJoin(root, userPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if !isWithinRoot(absRoot, resolved) {
+	// The root itself may live under a junction/symlink (common on Windows,
+	// e.g. a share folder moved to another drive); compare against its
+	// resolved form too, or every legitimate path would be rejected.
+	resolvedRoot := absRoot
+	if rr, err := resolveExisting(absRoot); err == nil {
+		resolvedRoot = rr
+	}
+	if !isWithinRoot(absRoot, resolved) && !isWithinRoot(resolvedRoot, resolved) {
 		return "", ErrPathEscapesRoot
 	}
 

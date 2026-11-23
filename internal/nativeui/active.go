@@ -64,7 +64,14 @@ func (t *activeTracker) apply(ev eventbus.Event) {
 	case ev.Kind == eventbus.KindConnect:
 		t.rows[connKey] = activeRow{source: ev.Source, remoteAddr: ev.RemoteAddr, kind: "연결", startedAt: ev.Time}
 	case ev.Kind == eventbus.KindDisconnect:
-		delete(t.rows, connKey)
+		// Drop the connection row and any transfer rows still open for
+		// this client: if a session dies mid-transfer, no "완료" event may
+		// ever arrive, and the row would otherwise linger forever.
+		for k, r := range t.rows {
+			if r.source == ev.Source && r.remoteAddr == ev.RemoteAddr {
+				delete(t.rows, k)
+			}
+		}
 	case ev.Kind == eventbus.KindTransfer && isProgress:
 		row, ok := t.rows[key]
 		if !ok {
@@ -140,7 +147,10 @@ func (t *activeTracker) snapshotFor(source string) []activeRow {
 	defer t.mu.Unlock()
 	out := make([]activeRow, 0, len(t.rows))
 	for _, r := range t.rows {
-		if r.source == source {
+		// Only transfers belong in 진행 중인 전송 / 활성 전송 — a bare
+		// control connection (FTP clients routinely open two at once) is
+		// not a transfer, matching app.js's renderActive filter.
+		if r.source == source && r.kind == "전송" {
 			out = append(out, r)
 		}
 	}

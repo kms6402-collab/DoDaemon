@@ -1,6 +1,7 @@
 package tftp
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"io"
@@ -14,18 +15,36 @@ import (
 
 const defaultBlksize = 512
 
+// maxWindowsize caps the RFC 7440 windowsize option. A window lets the
+// sender stream several blocks per ACK instead of one, which is what makes
+// TFTP usable over links with any real latency; 64 blocks is far past the
+// point of diminishing returns and still small enough that a lost block
+// only costs a modest retransmit burst.
+const maxWindowsize = 64
+
+// fileBufSize is the read-ahead / write-behind buffer around the file, so
+// a 512-byte-block transfer isn't one disk syscall per packet.
+const fileBufSize = 256 << 10
+
+// recvBufSize must hold any datagram a peer could send: on Windows a UDP
+// read into a smaller buffer fails with WSAEMSGSIZE instead of truncating,
+// which used to abort a transfer whenever the client sent an ERROR packet
+// or a stray larger datagram while we were waiting for a 4-byte ACK.
+const recvBufSize = 65536
+
 type negotiated struct {
-	blksize int
-	timeout time.Duration
-	tsize   *int64 // nil unless the client asked for tsize
-	oackKV  []string
+	blksize    int
+	windowsize int
+	timeout    time.Duration
+	tsize      *int64 // nil unless the client asked for tsize
+	oackKV     []string
 }
 
 // negotiateOptions applies RFC 2347/2348/2349 clamping: the server may
 // only ever accept a value the client offered or something more
 // conservative, never demand a larger blksize/timeout than requested.
 func (s *Server) negotiateOptions(req *request, fileSizeForRRQ int64) negotiated {
-	n := negotiated{blksize: defaultBlksize, timeout: time.Duration(s.cfg.TimeoutSec) * time.Second}
+	n := negotiated{blksize: defaultBlksize, windowsize: 1, timeout: time.Duration(s.cfg.TimeoutSec) * time.Second}
 
 	if v, ok := req.options["blksize"]; ok {
 		if bs, err := strconv.Atoi(v); err == nil && bs >= 8 && bs <= 65464 {
@@ -40,6 +59,15 @@ func (s *Server) negotiateOptions(req *request, fileSizeForRRQ int64) negotiated
 		if t, err := strconv.Atoi(v); err == nil && t >= 1 && t <= 255 {
 			n.timeout = time.Duration(t) * time.Second
 			n.oackKV = append(n.oackKV, "timeout", strconv.Itoa(t))
+		}
+	}
+	if v, ok := req.options["windowsize"]; ok {
+		if ws, err := strconv.Atoi(v); err == nil && ws >= 1 && ws <= 65535 {
+			if ws > maxWindowsize {
+				ws = maxWindowsize
+			}
+			n.windowsize = ws
+			n.oackKV = append(n.oackKV, "windowsize", strconv.Itoa(ws))
 		}
 	}
 	if v, ok := req.options["tsize"]; ok {
@@ -119,63 +147,180 @@ func (s *Server) handleRRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 	f, err := os.Open(path)
 	if err != nil {
 		s.sendError(conn, errFileNotFound, "file not found")
-		s.publish("error", remote.String(), "RRQ file not found", map[string]any{"path": req.filename})
+		s.publish("error", remote.String(), "RRQ file not found", map[string]any{"file": req.filename})
 		return
 	}
 	defer f.Close()
 
 	var fileSize int64
 	if fi, err := f.Stat(); err == nil {
+		if fi.IsDir() {
+			s.sendError(conn, errFileNotFound, "not a file")
+			s.publish("error", remote.String(), "RRQ target is a directory", map[string]any{"file": req.filename})
+			return
+		}
 		fileSize = fi.Size()
 	}
 
 	n := s.negotiateOptions(req, fileSize)
-	s.publish("transfer", remote.String(), "TFTP download started", map[string]any{"file": req.filename, "mode": mode, "blksize": n.blksize})
+	s.publish("transfer", remote.String(), "TFTP download started", map[string]any{"file": req.filename, "mode": mode, "blksize": n.blksize, "windowsize": n.windowsize})
+
+	rbuf := make([]byte, recvBufSize)
 
 	if len(n.oackKV) > 0 {
-		if !s.sendAndWaitACK(conn, encodeOACK(n.oackKV), 0, n.timeout) {
+		// The client answers our OACK with ACK(0); expressed as "one block
+		// past 65535" so awaitACK's wraparound arithmetic covers it too.
+		oack := encodeOACK(n.oackKV)
+		acked := false
+		for attempt := 0; attempt < s.cfg.MaxRetries && !acked; attempt++ {
+			if _, err := conn.Write(oack); err != nil {
+				break
+			}
+			k, status := s.awaitACK(conn, rbuf, 0xFFFF, 1, n.timeout)
+			if status == ackFatal {
+				s.publish("error", remote.String(), "RRQ aborted by client during option negotiation", map[string]any{"file": req.filename})
+				return
+			}
+			acked = k == 1
+		}
+		if !acked {
 			s.publish("error", remote.String(), "RRQ option negotiation timed out", map[string]any{"file": req.filename})
 			return
 		}
 	}
 
-	var block uint16 = 1
-	var bytesSent int64
-	lastProgress := time.Now()
-	reader := io.Reader(f)
-	buf := make([]byte, n.blksize)
+	type outBlock struct {
+		pkt []byte
+		n   int // file bytes in this block (pre-netascii)
+	}
+
+	reader := bufio.NewReaderSize(f, fileBufSize)
+	var (
+		lastAcked    uint16 // wire number of the last block the client confirmed
+		inFlight     []outBlock
+		eof          bool
+		retries      int
+		bytesSent    int64
+		lastProgress = time.Now()
+	)
 
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		nRead, readErr := io.ReadFull(reader, buf)
-		if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
-			s.sendError(conn, errNotDefined, "read error")
-			return
-		}
-		chunk := buf[:nRead]
-		if mode == "netascii" {
-			// Stateless expansion (LF -> CRLF); no cross-block carry needed.
-			// Note: expansion can push a block's wire size slightly above
-			// n.blksize, which is an accepted simplification for the rarely
-			// used netascii mode — firmware transfers (the primary use case)
-			// always use octet mode and are unaffected.
-			chunk = toNetascii(chunk)
+		// Top the window up with fresh blocks.
+		for !eof && len(inFlight) < n.windowsize {
+			buf := make([]byte, n.blksize)
+			nRead, readErr := io.ReadFull(reader, buf)
+			if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
+				s.sendError(conn, errNotDefined, "read error")
+				s.publish("error", remote.String(), "RRQ read failed", map[string]any{"file": req.filename, "error": readErr.Error()})
+				return
+			}
+			chunk := buf[:nRead]
+			if mode == "netascii" {
+				// Stateless expansion (LF -> CRLF); can push a block's wire
+				// size slightly above blksize — an accepted simplification
+				// for the rarely used netascii mode (firmware transfers use
+				// octet and are unaffected).
+				chunk = toNetascii(chunk)
+			}
+			block := lastAcked + uint16(len(inFlight)) + 1 // wraps 65535 -> 0 like other servers
+			pkt := encodeDATA(block, chunk)
+			inFlight = append(inFlight, outBlock{pkt: pkt, n: nRead})
+			if nRead < n.blksize {
+				eof = true
+			}
+			if _, err := conn.Write(pkt); err != nil {
+				s.publish("error", remote.String(), "RRQ send failed", map[string]any{"file": req.filename, "error": err.Error()})
+				return
+			}
 		}
 
-		if !s.sendAndWaitACK(conn, encodeDATA(block, chunk), block, n.timeout) {
-			s.publish("error", remote.String(), "RRQ transfer aborted (no ACK)", map[string]any{"file": req.filename, "block": block})
+		k, status := s.awaitACK(conn, rbuf, lastAcked, len(inFlight), n.timeout)
+		switch status {
+		case ackFatal:
+			s.publish("error", remote.String(), "RRQ aborted by client", map[string]any{"file": req.filename, "block": lastAcked + 1})
 			return
+		case ackTimeout:
+			retries++
+			if retries >= s.cfg.MaxRetries {
+				s.publish("error", remote.String(), "RRQ transfer aborted (no ACK)", map[string]any{"file": req.filename, "block": lastAcked + 1})
+				return
+			}
+			s.log.Debug("rrq retransmit", "remote", remote.String(), "block", lastAcked+1, "attempt", retries)
+			for _, b := range inFlight {
+				conn.Write(b.pkt)
+			}
+			continue
 		}
-		bytesSent += int64(nRead)
+
+		retries = 0
+		for _, b := range inFlight[:k] {
+			bytesSent += int64(b.n)
+		}
+		lastAcked += uint16(k)
+		inFlight = inFlight[k:]
 		s.publishProgress(remote.String(), req.filename, bytesSent, fileSize, &lastProgress)
 
-		if nRead < n.blksize {
-			s.publish("transfer", remote.String(), "TFTP download complete", map[string]any{"file": req.filename})
+		if eof && len(inFlight) == 0 {
+			s.publish("transfer", remote.String(), "TFTP download complete", map[string]any{"file": req.filename, "bytes": bytesSent})
 			return
 		}
-		block++
+		// A partial ACK inside a window (RFC 7440 §4) means the client lost
+		// the next block: restart the window from there.
+		for _, b := range inFlight {
+			conn.Write(b.pkt)
+		}
+	}
+}
+
+type ackStatus int
+
+const (
+	ackOK ackStatus = iota
+	ackTimeout
+	ackFatal
+)
+
+// awaitACK waits up to timeout for an ACK confirming between 1 and
+// maxAhead blocks past base (mod 2^16) and returns how many it confirms.
+//
+// A stale/duplicate ACK (for base itself or older) is ignored *without*
+// retransmitting and without restarting the timer. The old code resent the
+// current block on every stray ACK, so one delayed ACK made the server send
+// every following block twice for the rest of the transfer (the classic
+// "Sorcerer's Apprentice" bug) and could burn through the retry budget and
+// abort a healthy transfer.
+func (s *Server) awaitACK(conn *net.UDPConn, buf []byte, base uint16, maxAhead int, timeout time.Duration) (int, ackStatus) {
+	deadline := time.Now().Add(timeout)
+	for {
+		conn.SetReadDeadline(deadline)
+		nRead, err := conn.Read(buf)
+		if err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				return 0, ackTimeout
+			}
+			// Anything else on a connected UDP socket (e.g. an ICMP-driven
+			// reset) is treated like a lost packet: the retry loop decides.
+			if time.Now().After(deadline) {
+				return 0, ackTimeout
+			}
+			continue
+		}
+		pkt := buf[:nRead]
+		if block, perr := parseACK(pkt); perr == nil {
+			if k := int(block - base); k >= 1 && k <= maxAhead {
+				return k, ackOK
+			}
+			continue // stale ACK: keep waiting on the same deadline
+		}
+		if _, msg, perr := parseERROR(pkt); perr == nil {
+			s.log.Info("client aborted transfer", "remote", conn.RemoteAddr().String(), "message", msg)
+			return 0, ackFatal
+		}
+		// Unknown/garbage datagram: ignore.
 	}
 }
 
@@ -195,27 +340,47 @@ func (s *Server) handleWRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 	f, err := os.Create(path)
 	if err != nil {
 		s.sendError(conn, errAccessViolation, "cannot create file")
+		s.publish("error", remote.String(), "WRQ cannot create file", map[string]any{"file": req.filename, "error": err.Error()})
 		return
 	}
-	defer f.Close()
+	completed := false
+	defer func() {
+		f.Close()
+		if !completed {
+			// Never leave a truncated upload behind looking like a valid
+			// file (e.g. a half-received firmware image).
+			os.Remove(path)
+		}
+	}()
+	w := bufio.NewWriterSize(f, fileBufSize)
 
-	s.publish("transfer", remote.String(), "TFTP upload started", map[string]any{"file": req.filename, "mode": mode, "blksize": n.blksize})
+	s.publish("transfer", remote.String(), "TFTP upload started", map[string]any{"file": req.filename, "mode": mode, "blksize": n.blksize, "windowsize": n.windowsize})
 
-	var expected uint16 = 1
-	var bytesRecv int64
-	lastProgress := time.Now()
-	first := true
-	var carryCR bool
-
-	ack := func(block uint16) { conn.Write(encodeACK(block)) }
-
+	var initial []byte
 	if len(n.oackKV) > 0 {
-		conn.Write(encodeOACK(n.oackKV))
+		initial = encodeOACK(n.oackKV)
 	} else {
-		ack(0)
+		initial = encodeACK(0)
+	}
+	conn.Write(initial)
+
+	var (
+		expected     uint16 = 1
+		lastAck      uint16 // last block we ACKed (0 = the initial ACK/OACK)
+		sinceAck     int    // in-order blocks received since lastAck
+		gapAcked     bool   // already re-ACKed lastAck for the current gap
+		gotAny       bool
+		retries      int
+		carryCR      bool
+		bytesRecv    int64
+		lastProgress = time.Now()
+	)
+	ack := func(block uint16) {
+		conn.Write(encodeACK(block))
+		lastAck, sinceAck, gapAcked = block, 0, false
 	}
 
-	buf := make([]byte, 65507)
+	buf := make([]byte, recvBufSize)
 	for {
 		if ctx.Err() != nil {
 			return
@@ -223,86 +388,110 @@ func (s *Server) handleWRQ(ctx context.Context, conn *net.UDPConn, remote *net.U
 		conn.SetReadDeadline(time.Now().Add(n.timeout))
 		nRead, err := conn.Read(buf)
 		if err != nil {
-			if first {
-				// Retry the initial OACK/ACK(0) once more before giving up.
-				if len(n.oackKV) > 0 {
-					conn.Write(encodeOACK(n.oackKV))
-				} else {
-					ack(0)
+			var ne net.Error
+			if !(errors.As(err, &ne) && ne.Timeout()) {
+				continue // non-timeout socket error: behave as if the packet was lost
+			}
+			retries++
+			if retries > s.cfg.MaxRetries {
+				msg := "WRQ transfer aborted (timeout)"
+				if !gotAny {
+					msg = "WRQ timed out waiting for first DATA"
 				}
-				conn.SetReadDeadline(time.Now().Add(n.timeout))
-				nRead, err = conn.Read(buf)
-				if err != nil {
-					s.publish("error", remote.String(), "WRQ timed out waiting for first DATA", map[string]any{"file": req.filename})
-					return
-				}
-			} else {
-				s.publish("error", remote.String(), "WRQ transfer aborted (timeout)", map[string]any{"file": req.filename})
+				s.publish("error", remote.String(), msg, map[string]any{"file": req.filename, "block": expected})
 				return
 			}
+			// Our last ACK (or OACK) may have been lost — repeat it so the
+			// client resumes instead of both sides waiting each other out.
+			if !gotAny {
+				conn.Write(initial)
+			} else {
+				conn.Write(encodeACK(lastAck))
+			}
+			continue
 		}
 
 		block, data, perr := parseDATA(buf[:nRead])
 		if perr != nil {
 			if _, msg, oerr := parseERROR(buf[:nRead]); oerr == nil {
 				s.log.Info("client aborted upload", "remote", remote.String(), "message", msg)
+				s.publish("error", remote.String(), "WRQ aborted by client", map[string]any{"file": req.filename, "message": msg})
 				return
 			}
-			s.sendError(conn, errIllegalOperation, "expected DATA packet")
-			return
+			continue // stray non-DATA datagram (e.g. a retransmitted WRQ): ignore
 		}
-		first = false
+		gotAny = true
 
 		if block != expected {
-			ack(expected - 1) // duplicate/out-of-order: re-ack the last good block
+			// Duplicate or out-of-order: tell the sender where we are, once
+			// per gap, so a window isn't answered with a burst of identical
+			// ACKs that would each trigger another full retransmission.
+			// A repeat of exactly the last ACKed block means our ACK was
+			// lost, so that one is always answered (RFC 1350).
+			if !gapAcked || block == lastAck {
+				conn.Write(encodeACK(lastAck))
+				gapAcked = true
+			}
 			continue
 		}
+		retries = 0
 
 		out := data
 		if mode == "netascii" {
 			out, carryCR = fromNetascii(data, carryCR)
 		}
-		if _, err := f.Write(out); err != nil {
+		if _, err := w.Write(out); err != nil {
 			s.sendError(conn, errDiskFull, "write error")
 			s.publish("error", remote.String(), "WRQ write failed", map[string]any{"file": req.filename, "error": err.Error()})
 			return
 		}
-		ack(block)
 		bytesRecv += int64(len(data))
-		s.publishProgress(remote.String(), req.filename, bytesRecv, totalSize, &lastProgress)
+		expected++
+		sinceAck++
+		final := len(data) < n.blksize
 
-		if len(data) < n.blksize {
-			s.publish("transfer", remote.String(), "TFTP upload complete", map[string]any{"file": req.filename})
+		if final {
+			if err := w.Flush(); err != nil {
+				s.sendError(conn, errDiskFull, "write error")
+				s.publish("error", remote.String(), "WRQ write failed", map[string]any{"file": req.filename, "error": err.Error()})
+				return
+			}
+			ack(block)
+			completed = true
+			s.publish("transfer", remote.String(), "TFTP upload complete", map[string]any{"file": req.filename, "bytes": bytesRecv})
+			s.dally(conn, buf, block, n.timeout)
 			return
 		}
-		expected++
+		if sinceAck >= n.windowsize {
+			ack(block)
+		}
+		s.publishProgress(remote.String(), req.filename, bytesRecv, totalSize, &lastProgress)
 	}
 }
 
-// sendAndWaitACK sends pkt and waits for an ACK matching wantBlock, retrying
-// on timeout up to cfg.max_retries times.
-func (s *Server) sendAndWaitACK(conn *net.UDPConn, pkt []byte, wantBlock uint16, timeout time.Duration) bool {
-	buf := make([]byte, 4)
-	for attempt := 0; attempt < s.cfg.MaxRetries; attempt++ {
-		if _, err := conn.Write(pkt); err != nil {
-			return false
-		}
-		conn.SetReadDeadline(time.Now().Add(timeout))
+// dally keeps the session socket open briefly after the final ACK of an
+// upload (RFC 1350 §6): if that ACK was lost, the client retransmits the
+// last DATA block and must get the ACK again, otherwise it reports a
+// failed transfer even though the file was saved.
+func (s *Server) dally(conn *net.UDPConn, buf []byte, lastBlock uint16, timeout time.Duration) {
+	if timeout > 2*time.Second {
+		timeout = 2 * time.Second
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		conn.SetReadDeadline(deadline)
 		nRead, err := conn.Read(buf)
 		if err != nil {
 			var ne net.Error
 			if errors.As(err, &ne) && ne.Timeout() {
-				continue
+				return
 			}
-			return false
+			continue
 		}
-		block, perr := parseACK(buf[:nRead])
-		if perr == nil && block == wantBlock {
-			return true
+		if block, _, perr := parseDATA(buf[:nRead]); perr == nil && block == lastBlock {
+			conn.Write(encodeACK(lastBlock))
 		}
-		// Stray/duplicate ACK for an old block: keep waiting within this attempt budget.
 	}
-	return false
 }
 
 func (s *Server) sendError(conn *net.UDPConn, code uint16, msg string) {

@@ -31,7 +31,12 @@ var version = "dev"
 
 const (
 	shutdownTimeout = 15 * time.Second
-	configPath      = "configs/dodaemon.yaml" // relative to the exe's own directory, see run()
+	// configFileName lives directly in the exe's own folder (see run()), so
+	// copying that one folder moves the whole installation with its
+	// settings. Older versions kept it under configs\ — legacyConfigPath
+	// is migrated once on startup.
+	configFileName   = "dodaemon.yaml"
+	legacyConfigPath = "configs/dodaemon.yaml"
 )
 
 func main() {
@@ -45,9 +50,14 @@ func main() {
 }
 
 func run() error {
-	if err := chdirToExeDir(); err != nil {
+	exeDir, err := chdirToExeDir()
+	if err != nil {
 		return err
 	}
+	// Absolute, so a later working-directory change (e.g. by a Windows
+	// file dialog) can never make a save land somewhere else.
+	configPath := filepath.Join(exeDir, configFileName)
+	migrateLegacyConfig(filepath.Join(exeDir, legacyConfigPath), configPath)
 	firstRun, err := ensureConfigExists(configPath)
 	if err != nil {
 		return err
@@ -55,20 +65,37 @@ func run() error {
 	return runNativeGUI(configPath, firstRun)
 }
 
+// migrateLegacyConfig moves a pre-2.6 configs\dodaemon.yaml next to the
+// exe the first time the new version runs, and removes the then-empty
+// configs folder. Failures are ignored: worst case the user starts from a
+// fresh default config, which is what ensureConfigExists does anyway.
+func migrateLegacyConfig(legacy, current string) {
+	if _, err := os.Stat(current); err == nil {
+		return
+	}
+	if _, err := os.Stat(legacy); err != nil {
+		return
+	}
+	if err := os.Rename(legacy, current); err == nil {
+		_ = os.Remove(filepath.Dir(legacy)) // only succeeds if empty
+	}
+}
+
 // chdirToExeDir makes every relative path in config.Default() (data_dir,
-// tftp.root_dir, syslog.log_dir, ...) and configPath above resolve next to
+// tftp.root_dir, syslog.log_dir, ...) and the config file resolve next to
 // the exe itself, no matter what the caller's working directory was —
 // double-click, a shortcut without an explicit "start in", Task Scheduler,
 // all end up the same.
-func chdirToExeDir() error {
+func chdirToExeDir() (string, error) {
 	exePath, err := os.Executable()
 	if err != nil {
-		return err
+		return "", err
 	}
 	if resolved, err := filepath.EvalSymlinks(exePath); err == nil {
 		exePath = resolved
 	}
-	return os.Chdir(filepath.Dir(exePath))
+	dir := filepath.Dir(exePath)
+	return dir, os.Chdir(dir)
 }
 
 // ensureConfigExists auto-creates the safe-by-default config (every server

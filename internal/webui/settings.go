@@ -46,8 +46,6 @@ type ftpUserDTO struct {
 // to hand to the browser. Hostname is intentionally absent: it's pinned to
 // config.FixedHostname and not user-editable.
 type settingsDTO struct {
-	DataDir string `json:"data_dir"`
-
 	FTPEnabled          bool         `json:"ftp_enabled"`
 	FTPListen           string       `json:"ftp_listen"`
 	FTPPassiveLo        int          `json:"ftp_passive_lo"`
@@ -100,7 +98,6 @@ func toDTO(cfg *config.Config) settingsDTO {
 		users[i] = ftpUserDTO{Username: u.Username, HomeDir: u.HomeDir, Permissions: stringToPerms(u.Permissions)}
 	}
 	return settingsDTO{
-		DataDir: cfg.Server.DataDir,
 
 		FTPEnabled:          cfg.FTP.Enabled,
 		FTPListen:           cfg.FTP.Listen,
@@ -155,7 +152,7 @@ func applyDTO(base *config.Config, dto settingsDTO) (config.Config, error) {
 	newCfg := *base
 
 	newCfg.Server.Hostname = config.FixedHostname
-	newCfg.Server.DataDir = dto.DataDir
+	newCfg.Server.DataDir = config.FixedDataDir
 
 	newCfg.FTP.Enabled = dto.FTPEnabled
 	newCfg.FTP.Listen = dto.FTPListen

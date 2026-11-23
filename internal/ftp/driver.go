@@ -29,6 +29,12 @@ type driver struct {
 	log   *slog.Logger
 
 	tlsConfig atomic.Pointer[tls.Config]
+
+	// clients counts open control connections so ftp.max_connections is
+	// actually enforced. ftpserverlib always calls ClientDisconnected
+	// (deferred), even when ClientConnected rejected the client, so the
+	// increment in ClientConnected is unconditional.
+	clients atomic.Int64
 }
 
 func newDriver(cfg config.FTPConfig, acl *security.ACL, bus *eventbus.Bus, log *slog.Logger) (*driver, error) {
@@ -72,6 +78,12 @@ func (d *driver) GetSettings() (*ftpserver.Settings, error) {
 			End:   cfg.PassivePortRange[1],
 		},
 		DefaultTransferType: ftpserver.TransferTypeBinary,
+		// Always move bytes verbatim, even if the client sent TYPE A. Windows
+		// ftp.exe and many network devices default to ASCII mode, and the
+		// library's CRLF conversion both corrupts binary files (firmware,
+		// configs with mixed endings) and is far slower — it re-scans the
+		// stream line by line. 3CDaemon-style servers behave the same way.
+		DisableASCIIConversion: true,
 	}
 	if cfg.TLS.Enabled {
 		settings.TLSRequired = ftpserver.ClearOrEncrypted
@@ -80,6 +92,11 @@ func (d *driver) GetSettings() (*ftpserver.Settings, error) {
 }
 
 func (d *driver) ClientConnected(cc ftpserver.ClientContext) (string, error) {
+	n := d.clients.Add(1)
+	if limit := d.cfg.Load().MaxConnections; limit > 0 && n > int64(limit) {
+		d.publish(eventbus.KindError, cc.RemoteAddr().String(), fmt.Sprintf("connection rejected: max_connections (%d) reached", limit), nil)
+		return "Too many connections", fmt.Errorf("too many connections")
+	}
 	ip := remoteIP(cc.RemoteAddr())
 	if acl := d.acl.Load(); acl != nil && !acl.Allowed(ip) {
 		d.publish(eventbus.KindError, cc.RemoteAddr().String(), "connection rejected by IP ACL", nil)
@@ -90,6 +107,7 @@ func (d *driver) ClientConnected(cc ftpserver.ClientContext) (string, error) {
 }
 
 func (d *driver) ClientDisconnected(cc ftpserver.ClientContext) {
+	d.clients.Add(-1)
 	d.publish(eventbus.KindDisconnect, cc.RemoteAddr().String(), "client disconnected", nil)
 }
 

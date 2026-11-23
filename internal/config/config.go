@@ -16,6 +16,13 @@ import (
 // force this value rather than trusting whatever is in the YAML file.
 const FixedHostname = "DoDaeMon"
 
+// FixedDataDir is where DoDaemon keeps its own internal state (currently
+// only the generated SFTP host key). It is always the "data" folder next
+// to the exe (cmd/dodaemon chdirs there on startup) and is no longer
+// user-configurable — the old "데이터 폴더" setting confused users and had
+// no effect on where TFTP/FTP/Syslog files go, so Load/Save force it.
+const FixedDataDir = "./data"
+
 type Config struct {
 	Server ServerConfig `yaml:"server"`
 	FTP    FTPConfig    `yaml:"ftp"`
@@ -111,7 +118,7 @@ func Default() *Config {
 	return &Config{
 		Server: ServerConfig{
 			Hostname: FixedHostname,
-			DataDir:  "./data",
+			DataDir:  FixedDataDir,
 		},
 		FTP: FTPConfig{
 			Enabled:          false,
@@ -161,6 +168,7 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("config: parse %s: %w", path, err)
 	}
 	cfg.Server.Hostname = FixedHostname
+	cfg.Server.DataDir = FixedDataDir
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("config: invalid %s: %w", path, err)
 	}
@@ -170,6 +178,7 @@ func Load(path string) (*Config, error) {
 // Save writes cfg to path as YAML, creating parent directories as needed.
 func Save(path string, cfg *Config) error {
 	cfg.Server.Hostname = FixedHostname
+	cfg.Server.DataDir = FixedDataDir
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return err
 	}
@@ -184,10 +193,6 @@ func Save(path string, cfg *Config) error {
 // can't guarantee: valid listen addresses, sane port ranges, and that
 // referenced directories are usable.
 func (c *Config) Validate() error {
-	if c.Server.DataDir == "" {
-		return fmt.Errorf("server.data_dir must not be empty")
-	}
-
 	if c.FTP.Enabled {
 		if err := validateListenAddr("ftp.listen", c.FTP.Listen); err != nil {
 			return err
@@ -200,6 +205,9 @@ func (c *Config) Validate() error {
 			if err := validateTLSFiles("ftp.tls", c.FTP.TLS); err != nil {
 				return err
 			}
+		}
+		if c.FTP.AllowAnonymous && c.FTP.AnonymousHomeDir == "" {
+			return fmt.Errorf("ftp.anonymous_home_dir must be set when allow_anonymous is true")
 		}
 		for i, u := range c.FTP.Users {
 			if u.Username == "" {
@@ -274,6 +282,20 @@ func (c *Config) Validate() error {
 		}
 		if err := validateCIDRList("syslog.ip_allowlist", c.Syslog.IPAllowlist); err != nil {
 			return err
+		}
+		// A blank/zero rotate setting (an old config saved before these
+		// fields existed, or a settings-page field left empty) would
+		// otherwise silently persist as "rotate at 0 MB" / "expire
+		// immediately" — falling back to Default()'s values instead of
+		// erroring keeps the common case working without forcing the user
+		// to know sane numbers up front, unlike TFTP's timeout/retries
+		// (protocol-correctness knobs, not housekeeping ones) which do
+		// hard-error out of range.
+		if c.Syslog.Rotate.MaxSizeMB <= 0 {
+			c.Syslog.Rotate.MaxSizeMB = 100
+		}
+		if c.Syslog.Rotate.MaxAgeDay <= 0 {
+			c.Syslog.Rotate.MaxAgeDay = 30
 		}
 	}
 

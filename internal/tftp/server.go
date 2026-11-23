@@ -2,6 +2,7 @@ package tftp
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"sync"
@@ -24,9 +25,10 @@ type Server struct {
 	log *slog.Logger
 	bus *eventbus.Bus
 
-	mu   sync.Mutex
-	conn *net.UDPConn
-	wg   sync.WaitGroup
+	mu     sync.Mutex
+	conn   *net.UDPConn
+	wg     sync.WaitGroup
+	active map[string]struct{} // remote "ip:port" of sessions in progress
 }
 
 func New(cfg config.TFTPConfig, bus *eventbus.Bus, log *slog.Logger) *Server {
@@ -62,7 +64,10 @@ func (s *Server) Start(ctx context.Context) error {
 	for {
 		n, remote, err := conn.ReadFromUDP(buf)
 		if err != nil {
-			if ctx.Err() != nil {
+			// Shutdown closes the socket before the supervisor cancels ctx;
+			// without the ErrClosed check this loop spun at 100% CPU on the
+			// dead socket for as long as in-flight sessions took to finish.
+			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				break
 			}
 			continue
@@ -74,11 +79,34 @@ func (s *Server) Start(ctx context.Context) error {
 			continue
 		}
 
+		// A client that hasn't heard back yet (e.g. our OACK is still in
+		// flight) retransmits its RRQ/WRQ from the same port. Starting a
+		// second session for it would send the file twice in parallel — or,
+		// for WRQ, have two sessions truncate and write the same file — and
+		// show the transfer twice in the UI. The in-progress session already
+		// owns that client, so the repeat is dropped.
+		key := remote.String()
+		s.mu.Lock()
+		if s.active == nil {
+			s.active = make(map[string]struct{})
+		}
+		if _, busy := s.active[key]; busy {
+			s.mu.Unlock()
+			continue
+		}
+		s.active[key] = struct{}{}
+		s.mu.Unlock()
+
 		reqCopy := *req
 		remoteCopy := *remote
 		s.wg.Add(1)
 		go func() {
-			defer s.wg.Done()
+			defer func() {
+				s.mu.Lock()
+				delete(s.active, key)
+				s.mu.Unlock()
+				s.wg.Done()
+			}()
 			s.handleSession(ctx, &reqCopy, &remoteCopy)
 		}()
 	}

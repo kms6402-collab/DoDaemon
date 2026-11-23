@@ -19,6 +19,7 @@
   let users = []; // [{username, new_password, home_dir, permissions: []}]
   let editingIndex = -1;
   let browseTargetId = null;
+  let browseFileMode = false;
   let browseState = { path: "", drives: [] };
 
   function $(id) { return document.getElementById(id); }
@@ -125,18 +126,32 @@
     closeUserModal();
   });
 
-  // ---------- Folder browse modal ----------
+  // ---------- Folder / file browse modal ----------
+  // Folder mode (default): navigate with double-click, "이 폴더 선택"
+  // commits the current directory. File mode (TLS cert/key fields): files
+  // are also listed and a single click on one commits that full path
+  // immediately — there's no "select this folder" for a file field.
 
-  function openBrowse(targetId) {
+  function dirname(path) {
+    const i = Math.max(path.lastIndexOf("\\"), path.lastIndexOf("/"));
+    return i > 0 ? path.slice(0, i) : "";
+  }
+
+  function openBrowse(targetId, fileMode) {
     browseTargetId = targetId;
-    const start = $(targetId).value.trim();
+    browseFileMode = !!fileMode;
+    $("browse-modal-title").textContent = browseFileMode ? "파일 찾기" : "폴더 찾기";
+    $("browse-select").hidden = browseFileMode;
+    const current = $(targetId).value.trim();
+    const start = browseFileMode ? dirname(current) : current;
     $("browse-modal-overlay").classList.add("open");
     loadBrowse(start);
   }
   function closeBrowse() { $("browse-modal-overlay").classList.remove("open"); }
 
   function loadBrowse(path) {
-    const url = "/api/browse" + (path ? "?path=" + encodeURIComponent(path) : "");
+    let url = "/api/browse" + (path ? "?path=" + encodeURIComponent(path) : "");
+    if (browseFileMode) url += (path ? "&" : "?") + "files=1";
     fetch(url)
       .then((r) => r.json())
       .then((data) => {
@@ -150,18 +165,28 @@
           el.addEventListener("click", () => loadBrowse(el.dataset.drive))
         );
         const list = $("browse-list");
-        if (!data.dirs || data.dirs.length === 0) {
-          list.innerHTML = '<div class="empty" style="padding:14px 0;">하위 폴더가 없습니다.</div>';
+        const dirRows = (data.dirs || []).map(
+          (d) => '<div class="browse-row" data-dir="' + escapeHTML(d) + '">📁 ' + escapeHTML(d) + "</div>"
+        );
+        const fileRows = browseFileMode
+          ? (data.files || []).map((f) => '<div class="browse-row" data-file="' + escapeHTML(f) + '">📄 ' + escapeHTML(f) + "</div>")
+          : [];
+        if (dirRows.length === 0 && fileRows.length === 0) {
+          list.innerHTML = '<div class="empty" style="padding:14px 0;">' + (browseFileMode ? "폴더/파일이 없습니다." : "하위 폴더가 없습니다.") + "</div>";
         } else {
-          list.innerHTML = data.dirs
-            .map((d) => '<div class="browse-row" data-dir="' + escapeHTML(d) + '">📁 ' + escapeHTML(d) + "</div>")
-            .join("");
+          list.innerHTML = dirRows.join("") + fileRows.join("");
           list.querySelectorAll("[data-dir]").forEach((el) =>
             el.addEventListener("dblclick", () => loadBrowse(joinPath(data.path, el.dataset.dir)))
           );
+          list.querySelectorAll("[data-file]").forEach((el) =>
+            el.addEventListener("click", () => {
+              if (browseTargetId) $(browseTargetId).value = joinPath(data.path, el.dataset.file);
+              closeBrowse();
+            })
+          );
         }
       })
-      .catch(() => toast("폴더 목록을 불러오지 못했습니다.", true));
+      .catch(() => toast("목록을 불러오지 못했습니다.", true));
   }
   function joinPath(base, name) {
     if (!base) return name;
@@ -179,7 +204,7 @@
   });
 
   document.querySelectorAll("[data-browse]").forEach((btn) => {
-    btn.addEventListener("click", () => openBrowse(btn.dataset.browse));
+    btn.addEventListener("click", () => openBrowse(btn.dataset.browse, btn.dataset.browseMode === "file"));
   });
 
   // ---------- Load / Save ----------
@@ -218,7 +243,6 @@
     fetch("/api/settings")
       .then((r) => r.json())
       .then((dto) => {
-        setField("data_dir", dto.data_dir);
         setField("autostart_enabled", dto.autostart_enabled);
         if (!dto.autostart_available) {
           $("autostart_enabled").disabled = true;
@@ -271,7 +295,6 @@
 
   $("save-btn").addEventListener("click", () => {
     const dto = {
-      data_dir: getField("data_dir"),
       autostart_enabled: getField("autostart_enabled"),
 
       ftp_enabled: getField("ftp_enabled"),

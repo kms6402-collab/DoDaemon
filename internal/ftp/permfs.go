@@ -41,11 +41,11 @@ func newPermissionFs(root string, user auth.User, bus *eventbus.Bus, remoteAddr 
 	}
 }
 
-func (f *permissionFs) publish(kind eventbus.Kind, msg string) {
+func (f *permissionFs) publish(kind eventbus.Kind, msg string, fields map[string]any) {
 	if f.bus == nil {
 		return
 	}
-	f.bus.Publish(eventbus.Event{Source: "ftp", Kind: kind, RemoteAddr: f.remoteAddr, Message: msg})
+	f.bus.Publish(eventbus.Event{Source: "ftp", Kind: kind, RemoteAddr: f.remoteAddr, Message: msg, Fields: fields})
 }
 
 // track wraps file for progress reporting. total is the known size in
@@ -56,7 +56,12 @@ func (f *permissionFs) track(file afero.File, err error, direction, name string,
 	if err != nil {
 		return file, err
 	}
-	f.publish(eventbus.KindTransfer, fmt.Sprintf("FTP %s 시작: %s", direction, name))
+	// "file" must be set on start/complete exactly as on the progress
+	// events: both UIs key active rows by source|remote|file, so a start
+	// event without it collided with the connection row and the progress
+	// events opened a second row — one transfer showed up twice, and the
+	// progress row was never removed on completion.
+	f.publish(eventbus.KindTransfer, fmt.Sprintf("FTP %s 시작: %s", direction, name), map[string]any{"file": name})
 	tf := &trackedFile{File: file, fs: f, direction: direction, name: name, total: total}
 	tf.lastProgress.Store(time.Now())
 	return tf, nil
@@ -120,7 +125,7 @@ func (t *trackedFile) Close() error {
 	err := t.File.Close()
 	if !t.closed {
 		t.closed = true
-		t.fs.publish(eventbus.KindTransfer, fmt.Sprintf("FTP %s 완료: %s", t.direction, t.name))
+		t.fs.publish(eventbus.KindTransfer, fmt.Sprintf("FTP %s 완료: %s", t.direction, t.name), map[string]any{"file": t.name})
 	}
 	return err
 }

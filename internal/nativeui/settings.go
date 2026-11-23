@@ -47,18 +47,78 @@ func browseFolder(owner walk.Form, edit *walk.LineEdit) {
 	}
 }
 
+// browseFile opens a standard native "파일 찾기" open dialog (unlike
+// folder browsing, walk.FileDialog.ShowOpen uses GetOpenFileName's own
+// InitialDir handling, which doesn't have ShowBrowseFolder's drive-lock
+// bug — see browsefolder_windows.go's doc comment — so no custom wrapper
+// is needed here) seeded at edit's current file, and writes the chosen
+// path back into it. Used for the TLS cert/key fields.
+func browseFile(owner walk.Form, edit *walk.LineEdit, filter string) {
+	// GetOpenFileName (without OFN_NOCHANGEDIR, which walk doesn't set)
+	// changes the process working directory to wherever the user browsed.
+	// Every relative path in the config (./data/tftp, ./logs, ...) and the
+	// SFTP host key resolve against the cwd, so without restoring it
+	// DoDaemon would silently start creating its folders next to the
+	// picked certificate instead of next to the exe.
+	if cwd, err := os.Getwd(); err == nil {
+		defer os.Chdir(cwd)
+	}
+	dlg := &walk.FileDialog{Title: "파일 찾기", Filter: filter, FilePath: edit.Text()}
+	if ok, err := dlg.ShowOpen(owner); err == nil && ok {
+		edit.SetText(dlg.FilePath)
+	}
+}
+
+// addBtnFunc matches the signature of the addBtn closure each dialog
+// builds locally (see openSettings/editFTPUserDialog): it creates one
+// styledButton, defers its click-wiring until after the dialog exists,
+// and returns the widget to place in the declarative tree.
+type addBtnFunc func(text string, bg walk.Color, onClick func()) Widget
+
+// newAddBtn returns an addBtn closure plus the slice it appends deferred
+// wiring calls to — callers must invoke every entry in that slice once
+// their dialog's Create() has returned real widgets to attach clicks to.
+func newAddBtn() (addBtnFunc, *[]func()) {
+	deferred := make([]func(), 0, 8)
+	addBtn := func(text string, bg walk.Color, onClick func()) Widget {
+		var box *walk.Composite
+		var lbl *walk.Label
+		widget := styledButton(&box, &lbl, text, bg)
+		deferred = append(deferred, func() { wireButtonClick(box, lbl, onClick) })
+		return widget
+	}
+	return addBtn, &deferred
+}
+
 // pathField builds a folder LineEdit paired with a "폴더 찾기" button.
 // owner is a pointer to the dialog's own *walk.Dialog variable — at the
 // time this is called (building the declarative tree) that variable is
 // still nil, since Dialog.AssignTo only populates it once Run() actually
 // creates the window; capturing **walk.Dialog defers the dereference to
 // click time, by which point it's set.
-func pathField(edit **walk.LineEdit, initial string, owner **walk.Dialog) Widget {
+func pathField(edit **walk.LineEdit, initial string, owner **walk.Dialog, addBtn addBtnFunc) Widget {
 	return Composite{
 		Layout: HBox{MarginsZero: true},
 		Children: []Widget{
-			LineEdit{AssignTo: edit, Text: initial},
-			PushButton{Text: "폴더 찾기", OnClicked: func() { browseFolder(*owner, *edit) }},
+			LineEdit{AssignTo: edit, Text: initial, Font: Font{Family: fontFamily, PointSize: 9}},
+			addBtn("폴더 찾기", colorBtnNeutral, func() { browseFolder(*owner, *edit) }),
+		},
+	}
+}
+
+// certKeyField mirrors pathField for a TLS certificate/key file instead of
+// a directory — same deferred-click plumbing, but backed by browseFile.
+func certKeyField(edit **walk.LineEdit, initial string, owner **walk.Dialog, addBtn addBtnFunc) Widget {
+	// Win32's OPENFILENAME filter is NUL-separated description/pattern
+	// pairs (walk.FileDialog.show copies this string as-is, with no '|'
+	// translation), not the '|'-delimited shorthand some other toolkits
+	// accept.
+	const filter = "인증서/키 파일 (*.crt;*.cer;*.pem;*.key)\x00*.crt;*.cer;*.pem;*.key\x00모든 파일 (*.*)\x00*.*\x00"
+	return Composite{
+		Layout: HBox{MarginsZero: true},
+		Children: []Widget{
+			LineEdit{AssignTo: edit, Text: initial, Font: Font{Family: fontFamily, PointSize: 9}},
+			addBtn("찾기", colorBtnNeutral, func() { browseFile(*owner, *edit, filter) }),
 		},
 	}
 }
@@ -76,6 +136,21 @@ func splitAllowlist(text string) []string {
 	return out
 }
 
+// cancelProxyButton is an invisible real PushButton whose only job is
+// keeping Esc-to-cancel working. Windows' modal dialog navigation
+// (IsDialogMessage, in walk's own message loop) intercepts Escape before
+// it ever reaches a WM_KEYDOWN handler and turns it into WM_COMMAND
+// IDCANCEL — which walk's Dialog only acts on if a real *walk.PushButton
+// is registered via CancelButton (declarative.Dialog.CancelButton's type
+// requires it). Every button the user can actually see is a styled
+// Composite+Label instead (see styledButton's doc comment for why plain
+// PushButton is avoided everywhere else), so this one stays Visible:false
+// and never appears. There's no Enter-to-save equivalent: some tabs hold
+// multi-line TextEdit allowlists where Enter must stay a plain newline.
+func cancelProxyButton(box **walk.PushButton, onCancel func()) Widget {
+	return PushButton{AssignTo: box, Visible: false, OnClicked: onCancel}
+}
+
 // openSettings shows the modal settings dialog, seeded from the currently
 // loaded config. On 저장 it validates and writes the config file; the
 // config.Watcher already running in the supervisor (see cmd/dodaemon's
@@ -87,9 +162,9 @@ func (w *Window) openSettings() {
 	users := append([]config.FTPUser(nil), cfg.FTP.Users...)
 
 	var dlg *walk.Dialog
-	var saveBtn, cancelBtn *walk.PushButton
+	var cancelProxy *walk.PushButton
+	addBtn, deferred := newAddBtn()
 
-	var dataDirEdit *walk.LineEdit
 	var autostartEnabled *walk.CheckBox
 
 	var ftpEnabled, ftpAllowAnon, ftpTLSEnabled, sftpEnabled *walk.CheckBox
@@ -125,79 +200,85 @@ func (w *Window) openSettings() {
 
 	fieldFont := Font{Family: fontFamily, PointSize: 9}
 	hintFont := Font{Family: fontFamily, PointSize: 8}
+	sectionFont := Font{Family: fontFamily, PointSize: 9, Bold: true}
 
 	dialog := Dialog{
-		AssignTo:      &dlg,
-		Title:         "DoDaemon 설정",
-		Icon:          w.icon,
-		Font:          fieldFont,
-		MinSize:       Size{Width: 720, Height: 620},
-		Layout:        VBox{},
-		DefaultButton: &saveBtn,
-		CancelButton:  &cancelBtn,
+		AssignTo: &dlg,
+		Title:    "DoDaemon 설정",
+		Icon:     w.icon,
+		Font:     fieldFont,
+		// Wide enough that every tab's two-column rows (passive port
+		// range, TLS cert/key + their 찾기 buttons, etc.) lay out on one
+		// line without wrapping or clipping, and tall enough that most
+		// tabs fit without the ScrollView below ever needing to scroll on
+		// a normal 1080p+ display — every tab is wrapped in one anyway so
+		// nothing is ever unreachable on a smaller screen.
+		MinSize:      Size{Width: 820, Height: 660},
+		Layout:       VBox{},
+		CancelButton: &cancelProxy,
 		Children: []Widget{
+			cancelProxyButton(&cancelProxy, func() { dlg.Cancel() }),
 			TabWidget{
+				Font: fieldFont, // TabWidget's tab strip is a second native
+				// control that only takes the Font that's set directly on
+				// it (see styledButton's neighbor, applyFontRecursive-less
+				// approach used throughout this file); without this the
+				// tab labels render in Windows' hardcoded default font
+				// even though every field below them uses JetBrains Mono.
 				Pages: []TabPage{
 					{
-						Title:  "일반",
-						Layout: VBox{},
-						Children: []Widget{
-							Label{Text: "데이터 폴더"},
-							pathField(&dataDirEdit, cfg.Server.DataDir, &dlg),
-							CheckBox{
-								AssignTo: &autostartEnabled, Text: "Windows 시작 시 자동 실행",
-								Checked: autostart.IsEnabled(), Enabled: autostart.Available(),
-							},
-							VSpacer{},
-						},
-					},
-					{
 						Title:  "FTP",
+						Font:   fieldFont,
 						Layout: VBox{},
 						Children: []Widget{
 							ScrollView{
 								Layout: VBox{MarginsZero: true},
 								Children: []Widget{
-									CheckBox{AssignTo: &ftpEnabled, Text: "FTP 서버 사용", Checked: cfg.FTP.Enabled},
-									Label{Text: "리슨 주소 (host:port)"},
-									LineEdit{AssignTo: &ftpListen, Text: cfg.FTP.Listen},
-									Label{Text: "패시브 포트 범위"},
+									CheckBox{AssignTo: &ftpEnabled, Text: "FTP 서버 사용", Font: fieldFont, Checked: cfg.FTP.Enabled},
+									Label{Text: "리슨 주소 (host:port)", Font: fieldFont},
+									LineEdit{AssignTo: &ftpListen, Text: cfg.FTP.Listen, Font: fieldFont},
+									Label{Text: "패시브 포트 범위", Font: fieldFont},
 									Composite{
 										Layout: HBox{MarginsZero: true},
 										Children: []Widget{
-											NumberEdit{AssignTo: &ftpPassiveLo, Value: float64(cfg.FTP.PassivePortRange[0]), MinValue: 1, MaxValue: 65535, Decimals: 0},
-											Label{Text: "~"},
-											NumberEdit{AssignTo: &ftpPassiveHi, Value: float64(cfg.FTP.PassivePortRange[1]), MinValue: 1, MaxValue: 65535, Decimals: 0},
+											NumberEdit{AssignTo: &ftpPassiveLo, Value: float64(cfg.FTP.PassivePortRange[0]), MinValue: 1, MaxValue: 65535, Decimals: 0, Font: fieldFont},
+											Label{Text: "~", Font: fieldFont},
+											NumberEdit{AssignTo: &ftpPassiveHi, Value: float64(cfg.FTP.PassivePortRange[1]), MinValue: 1, MaxValue: 65535, Decimals: 0, Font: fieldFont},
 										},
 									},
-									Label{Text: "최대 동시 연결 수"},
-									NumberEdit{AssignTo: &ftpMaxConn, Value: float64(cfg.FTP.MaxConnections), MinValue: 1, MaxValue: 10000, Decimals: 0},
-									CheckBox{AssignTo: &ftpAllowAnon, Text: "익명 접속 허용", Checked: cfg.FTP.AllowAnonymous},
-									Label{Text: "익명 홈 디렉터리"},
-									pathField(&ftpAnonHome, cfg.FTP.AnonymousHomeDir, &dlg),
-									CheckBox{AssignTo: &ftpTLSEnabled, Text: "TLS(FTPS) 사용", Checked: cfg.FTP.TLS.Enabled},
-									Label{Text: "TLS 인증서 파일"},
-									LineEdit{AssignTo: &ftpTLSCert, Text: cfg.FTP.TLS.CertFile},
-									Label{Text: "TLS 키 파일"},
-									LineEdit{AssignTo: &ftpTLSKey, Text: cfg.FTP.TLS.KeyFile},
-									CheckBox{AssignTo: &sftpEnabled, Text: "SFTP 사용 (FTP 계정·권한·IP 허용목록 공유)", Checked: cfg.FTP.SFTPEnabled},
-									Label{Text: "SFTP 리슨 주소 (host:port)"},
-									LineEdit{AssignTo: &sftpListen, Text: cfg.FTP.SFTPListen},
-									Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: Font{Family: fontFamily, PointSize: 9, Bold: true}},
-									TextEdit{AssignTo: &ftpAllowlist, Text: joinAllowlist(cfg.FTP.IPAllowlist), MinSize: Size{Height: 50}, VScroll: true},
-									Label{Text: "FTP 계정", Font: Font{Family: fontFamily, PointSize: 9, Bold: true}},
-									ListBox{AssignTo: &ftpUserList, Model: userDisplayItems(), MinSize: Size{Height: 110}},
+									Label{Text: "최대 동시 연결 수", Font: fieldFont},
+									NumberEdit{AssignTo: &ftpMaxConn, Value: float64(cfg.FTP.MaxConnections), MinValue: 1, MaxValue: 10000, Decimals: 0, Font: fieldFont},
+									CheckBox{AssignTo: &ftpAllowAnon, Text: "익명 접속 허용", Font: fieldFont, Checked: cfg.FTP.AllowAnonymous},
+									Label{Text: "익명 홈 디렉터리", Font: fieldFont},
+									pathField(&ftpAnonHome, cfg.FTP.AnonymousHomeDir, &dlg, addBtn),
+									CheckBox{AssignTo: &ftpTLSEnabled, Text: "TLS(FTPS) 사용", Font: fieldFont, Checked: cfg.FTP.TLS.Enabled},
+									Composite{
+										Layout: Grid{Columns: 2},
+										Children: []Widget{
+											Label{Text: "TLS 인증서 파일", Font: fieldFont},
+											Label{Text: "TLS 키 파일", Font: fieldFont},
+											certKeyField(&ftpTLSCert, cfg.FTP.TLS.CertFile, &dlg, addBtn),
+											certKeyField(&ftpTLSKey, cfg.FTP.TLS.KeyFile, &dlg, addBtn),
+										},
+									},
+									CheckBox{AssignTo: &sftpEnabled, Text: "SFTP 사용 (FTP 계정·권한·IP 허용목록 공유)", Font: fieldFont, Checked: cfg.FTP.SFTPEnabled},
+									Label{Text: "SFTP 리슨 주소 (host:port)", Font: fieldFont},
+									LineEdit{AssignTo: &sftpListen, Text: cfg.FTP.SFTPListen, Font: fieldFont},
+									Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: sectionFont},
+									TextEdit{AssignTo: &ftpAllowlist, Text: joinAllowlist(cfg.FTP.IPAllowlist), MinSize: Size{Height: 50}, VScroll: true, Font: fieldFont},
+									Label{Text: "FTP 계정", Font: sectionFont},
+									ListBox{AssignTo: &ftpUserList, Model: userDisplayItems(), MinSize: Size{Height: 110}, Font: fieldFont},
 									Composite{
 										Layout: HBox{MarginsZero: true},
 										Children: []Widget{
-											PushButton{Text: "추가", OnClicked: func() {
+											addBtn("추가", colorAccent, func() {
 												u, ok := editFTPUserDialog(dlg, nil)
 												if ok {
 													users = append(users, u)
 													refreshUserList()
 												}
-											}},
-											PushButton{Text: "편집", OnClicked: func() {
+											}),
+											addBtn("편집", colorBtnNeutral, func() {
 												idx := ftpUserList.CurrentIndex()
 												if idx < 0 {
 													walk.MsgBox(dlg, "안내", "편집할 계정을 선택하세요.", walk.MsgBoxIconInformation)
@@ -208,8 +289,8 @@ func (w *Window) openSettings() {
 													users[idx] = u
 													refreshUserList()
 												}
-											}},
-											PushButton{Text: "삭제", OnClicked: func() {
+											}),
+											addBtn("삭제", colorBtnDanger, func() {
 												idx := ftpUserList.CurrentIndex()
 												if idx < 0 {
 													walk.MsgBox(dlg, "안내", "삭제할 계정을 선택하세요.", walk.MsgBoxIconInformation)
@@ -217,7 +298,7 @@ func (w *Window) openSettings() {
 												}
 												users = append(users[:idx], users[idx+1:]...)
 												refreshUserList()
-											}},
+											}),
 											HSpacer{},
 										},
 									},
@@ -227,71 +308,100 @@ func (w *Window) openSettings() {
 					},
 					{
 						Title:  "TFTP",
-						Layout: VBox{},
-						Children: []Widget{
-							CheckBox{AssignTo: &tftpEnabled, Text: "TFTP 서버 사용", Checked: cfg.TFTP.Enabled},
-							Label{Text: "리슨 주소 (host:port)"},
-							LineEdit{AssignTo: &tftpListen, Text: cfg.TFTP.Listen},
-							Label{Text: "루트 폴더"},
-							pathField(&tftpRootDir, cfg.TFTP.RootDir, &dlg),
-							Label{Text: "권한", Font: Font{Family: fontFamily, PointSize: 9, Bold: true}},
-							RadioButton{AssignTo: &tftpPermRW, Text: "읽기·쓰기 허용"},
-							RadioButton{AssignTo: &tftpPermRO, Text: "읽기 전용"},
-							RadioButton{AssignTo: &tftpPermWO, Text: "쓰기 전용"},
-							Label{Text: "최대 블록 크기 (8~65464)"},
-							NumberEdit{AssignTo: &tftpMaxBlksize, Value: float64(cfg.TFTP.MaxBlksize), MinValue: 8, MaxValue: 65464, Decimals: 0},
-							Label{Text: "ACK 응답 대기 시간 (초, 1~255)"},
-							NumberEdit{AssignTo: &tftpTimeoutSec, Value: float64(cfg.TFTP.TimeoutSec), MinValue: 1, MaxValue: 255, Decimals: 0},
-							Label{Text: "재전송 최대 횟수 (1~20)"},
-							NumberEdit{AssignTo: &tftpMaxRetries, Value: float64(cfg.TFTP.MaxRetries), MinValue: 1, MaxValue: 20, Decimals: 0},
-							VSpacer{},
-						},
-					},
-					{
-						Title:  "Syslog",
+						Font:   fieldFont,
 						Layout: VBox{},
 						Children: []Widget{
 							ScrollView{
 								Layout: VBox{MarginsZero: true},
 								Children: []Widget{
-									CheckBox{AssignTo: &syslogEnabled, Text: "Syslog 서버 사용", Checked: cfg.Syslog.Enabled},
-									Label{Text: "UDP 리슨 주소"},
-									LineEdit{AssignTo: &syslogUDP, Text: cfg.Syslog.UDPListen},
-									Label{Text: "TCP 리슨 주소 (비워두면 비활성)"},
-									LineEdit{AssignTo: &syslogTCP, Text: cfg.Syslog.TCPListen},
-									Label{Text: "로그 폴더"},
-									pathField(&syslogLogDir, cfg.Syslog.LogDir, &dlg),
-									Label{Text: "로그 파일 최대 크기 (MB)"},
-									NumberEdit{AssignTo: &syslogMaxSize, Value: float64(cfg.Syslog.Rotate.MaxSizeMB), MinValue: 1, MaxValue: 100000, Decimals: 0},
-									Label{Text: "로그 보관 기간 (일)"},
-									NumberEdit{AssignTo: &syslogMaxAge, Value: float64(cfg.Syslog.Rotate.MaxAgeDay), MinValue: 0, MaxValue: 3650, Decimals: 0},
-									CheckBox{AssignTo: &syslogCompress, Text: "오래된 로그 압축", Checked: cfg.Syslog.Rotate.Compress},
-									CheckBox{AssignTo: &syslogTLSEnabled, Text: "TLS 사용 (TCP)", Checked: cfg.Syslog.TLS.Enabled},
-									Label{Text: "TLS 인증서 파일"},
-									LineEdit{AssignTo: &syslogTLSCert, Text: cfg.Syslog.TLS.CertFile},
-									Label{Text: "TLS 키 파일"},
-									LineEdit{AssignTo: &syslogTLSKey, Text: cfg.Syslog.TLS.KeyFile},
-									Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: Font{Family: fontFamily, PointSize: 9, Bold: true}},
-									TextEdit{AssignTo: &syslogAllowlist, Text: joinAllowlist(cfg.Syslog.IPAllowlist), MinSize: Size{Height: 50}, VScroll: true},
+									CheckBox{AssignTo: &tftpEnabled, Text: "TFTP 서버 사용", Font: fieldFont, Checked: cfg.TFTP.Enabled},
+									Label{Text: "리슨 주소 (host:port)", Font: fieldFont},
+									LineEdit{AssignTo: &tftpListen, Text: cfg.TFTP.Listen, Font: fieldFont},
+									Label{Text: "루트 폴더", Font: fieldFont},
+									pathField(&tftpRootDir, cfg.TFTP.RootDir, &dlg, addBtn),
+									Label{Text: "권한", Font: sectionFont},
+									RadioButton{AssignTo: &tftpPermRW, Text: "읽기·쓰기 허용", Font: fieldFont},
+									RadioButton{AssignTo: &tftpPermRO, Text: "읽기 전용", Font: fieldFont},
+									RadioButton{AssignTo: &tftpPermWO, Text: "쓰기 전용", Font: fieldFont},
+									Label{Text: "최대 블록 크기 (8~65464)", Font: fieldFont},
+									NumberEdit{AssignTo: &tftpMaxBlksize, Value: float64(cfg.TFTP.MaxBlksize), MinValue: 8, MaxValue: 65464, Decimals: 0, Font: fieldFont},
+									Label{Text: "ACK 응답 대기 시간 (초, 1~255)", Font: fieldFont},
+									NumberEdit{AssignTo: &tftpTimeoutSec, Value: float64(cfg.TFTP.TimeoutSec), MinValue: 1, MaxValue: 255, Decimals: 0, Font: fieldFont},
+									Label{Text: "재전송 최대 횟수 (1~20)", Font: fieldFont},
+									NumberEdit{AssignTo: &tftpMaxRetries, Value: float64(cfg.TFTP.MaxRetries), MinValue: 1, MaxValue: 20, Decimals: 0, Font: fieldFont},
+									VSpacer{},
+								},
+							},
+						},
+					},
+					{
+						Title:  "Syslog",
+						Font:   fieldFont,
+						Layout: VBox{},
+						Children: []Widget{
+							ScrollView{
+								Layout: VBox{MarginsZero: true},
+								Children: []Widget{
+									CheckBox{AssignTo: &syslogEnabled, Text: "Syslog 서버 사용", Font: fieldFont, Checked: cfg.Syslog.Enabled},
+									Label{Text: "UDP 리슨 주소", Font: fieldFont},
+									LineEdit{AssignTo: &syslogUDP, Text: cfg.Syslog.UDPListen, Font: fieldFont},
+									Label{Text: "TCP 리슨 주소 (비워두면 비활성)", Font: fieldFont},
+									LineEdit{AssignTo: &syslogTCP, Text: cfg.Syslog.TCPListen, Font: fieldFont},
+									Label{Text: "로그 폴더", Font: fieldFont},
+									pathField(&syslogLogDir, cfg.Syslog.LogDir, &dlg, addBtn),
+									Composite{
+										Layout: Grid{Columns: 2},
+										Children: []Widget{
+											Label{Text: "로그 파일 최대 크기 (MB)", Font: fieldFont},
+											Label{Text: "로그 보관 기간 (일)", Font: fieldFont},
+											// 0 isn't a valid value for either — config.Validate
+											// now floors a saved 0/blank back to the same
+											// 100 MB / 30 day defaults Default() uses, so the
+											// field's own MinValue just keeps the user from
+											// typing a number that would immediately get
+											// silently corrected on the next load.
+											NumberEdit{AssignTo: &syslogMaxSize, Value: float64(cfg.Syslog.Rotate.MaxSizeMB), MinValue: 1, MaxValue: 100000, Decimals: 0, Font: fieldFont},
+											NumberEdit{AssignTo: &syslogMaxAge, Value: float64(cfg.Syslog.Rotate.MaxAgeDay), MinValue: 1, MaxValue: 3650, Decimals: 0, Font: fieldFont},
+										},
+									},
+									CheckBox{AssignTo: &syslogCompress, Text: "오래된 로그 압축", Font: fieldFont, Checked: cfg.Syslog.Rotate.Compress},
+									CheckBox{AssignTo: &syslogTLSEnabled, Text: "TLS 사용 (TCP)", Font: fieldFont, Checked: cfg.Syslog.TLS.Enabled},
+									Composite{
+										Layout: Grid{Columns: 2},
+										Children: []Widget{
+											Label{Text: "TLS 인증서 파일", Font: fieldFont},
+											Label{Text: "TLS 키 파일", Font: fieldFont},
+											certKeyField(&syslogTLSCert, cfg.Syslog.TLS.CertFile, &dlg, addBtn),
+											certKeyField(&syslogTLSKey, cfg.Syslog.TLS.KeyFile, &dlg, addBtn),
+										},
+									},
+									Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: sectionFont},
+									TextEdit{AssignTo: &syslogAllowlist, Text: joinAllowlist(cfg.Syslog.IPAllowlist), MinSize: Size{Height: 50}, VScroll: true, Font: fieldFont},
 								},
 							},
 						},
 					},
 					{
 						Title:  "Web",
+						Font:   fieldFont,
 						Layout: VBox{},
 						Children: []Widget{
-							CheckBox{AssignTo: &webEnabled, Text: "Web 사용", Checked: cfg.WebUI.Enabled},
-							Label{Text: "리슨 주소 (host:port)"},
-							LineEdit{AssignTo: &webListen, Text: cfg.WebUI.Listen},
-							Label{Text: "관리자 계정", Font: Font{Family: fontFamily, PointSize: 9, Bold: true}},
-							Label{Text: "사용자 이름"},
-							LineEdit{AssignTo: &webUsername, Text: cfg.WebUI.Auth.Username},
-							Label{Text: "비밀번호 (변경하려면 입력, 비워두면 유지)"},
-							LineEdit{AssignTo: &webPassword, PasswordMode: true},
-							Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: Font{Family: fontFamily, PointSize: 9, Bold: true}},
-							TextEdit{AssignTo: &webAllowlist, Text: joinAllowlist(cfg.WebUI.IPAllowlist), MinSize: Size{Height: 50}, VScroll: true},
-							VSpacer{},
+							ScrollView{
+								Layout: VBox{MarginsZero: true},
+								Children: []Widget{
+									CheckBox{AssignTo: &webEnabled, Text: "Web 사용", Font: fieldFont, Checked: cfg.WebUI.Enabled},
+									Label{Text: "리슨 주소 (host:port)", Font: fieldFont},
+									LineEdit{AssignTo: &webListen, Text: cfg.WebUI.Listen, Font: fieldFont},
+									Label{Text: "관리자 계정", Font: sectionFont},
+									Label{Text: "사용자 이름", Font: fieldFont},
+									LineEdit{AssignTo: &webUsername, Text: cfg.WebUI.Auth.Username, Font: fieldFont},
+									Label{Text: "비밀번호 (변경하려면 입력, 비워두면 유지)", Font: fieldFont},
+									LineEdit{AssignTo: &webPassword, PasswordMode: true, Font: fieldFont},
+									Label{Text: "접속 허용 IP 대역 (화이트리스트, 한 줄에 하나, 비워두면 전체 허용)", Font: sectionFont},
+									TextEdit{AssignTo: &webAllowlist, Text: joinAllowlist(cfg.WebUI.IPAllowlist), MinSize: Size{Height: 50}, VScroll: true, Font: fieldFont},
+									VSpacer{},
+								},
+							},
 						},
 					},
 				},
@@ -299,13 +409,22 @@ func (w *Window) openSettings() {
 			Composite{
 				Layout: HBox{MarginsZero: true},
 				Children: []Widget{
+					// The former 일반 tab held only this checkbox plus a
+					// "데이터 폴더" path that nothing user-facing needed (it
+					// is now fixed to <exe 폴더>\data), so the tab is gone
+					// and the checkbox lives here in the footer instead.
+					CheckBox{
+						AssignTo: &autostartEnabled, Text: "Windows 시작 시 자동 실행", Font: fieldFont,
+						Checked: autostart.IsEnabled(), Enabled: autostart.Available(),
+					},
+					HSpacer{Size: 12},
 					Label{Text: "저장하면 실행 중인 서비스에 바로 적용됩니다.", Font: hintFont, TextColor: colorDim},
 					HSpacer{},
-					PushButton{AssignTo: &saveBtn, Text: "저장", OnClicked: func() {
+					addBtn("저장", colorAccent, func() {
 						newCfg := cfg
 
 						newCfg.Server.Hostname = config.FixedHostname
-						newCfg.Server.DataDir = dataDirEdit.Text()
+						newCfg.Server.DataDir = config.FixedDataDir
 
 						newCfg.FTP.Enabled = ftpEnabled.Checked()
 						newCfg.FTP.Listen = ftpListen.Text()
@@ -369,8 +488,8 @@ func (w *Window) openSettings() {
 							}
 						}
 						dlg.Accept()
-					}},
-					PushButton{AssignTo: &cancelBtn, Text: "취소", OnClicked: func() { dlg.Cancel() }},
+					}),
+					addBtn("취소", colorBtnNeutral, func() { dlg.Cancel() }),
 				},
 			},
 		},
@@ -380,8 +499,11 @@ func (w *Window) openSettings() {
 		walk.MsgBox(w.mw, "오류", err.Error(), walk.MsgBoxIconError)
 		return
 	}
+	for _, wire := range *deferred {
+		wire()
+	}
 	// RadioButton has no declarative Checked field (unlike CheckBox), so the
-	// initial TFTP 권한 selection is set imperatively here, once the real
+	// initial TFTP 권한 선택 is set imperatively here, once the real
 	// *walk.RadioButton values exist post-Create.
 	switch {
 	case cfg.TFTP.AllowRead && cfg.TFTP.AllowWrite:
@@ -412,8 +534,11 @@ func editFTPUserDialog(owner walk.Form, existing *config.FTPUser) (config.FTPUse
 		pwHint = "비밀번호 (변경하려면 입력, 비워두면 유지)"
 	}
 
+	fieldFont := Font{Family: fontFamily, PointSize: 9}
+
 	var dlg *walk.Dialog
-	var okBtn, cancelBtn *walk.PushButton
+	var cancelProxy *walk.PushButton
+	addBtn, deferred := newAddBtn()
 	var usernameEdit, passwordEdit, homeDirEdit *walk.LineEdit
 	permChecks := make([]*walk.CheckBox, len(permCodes))
 
@@ -423,6 +548,7 @@ func editFTPUserDialog(owner walk.Form, existing *config.FTPUser) (config.FTPUse
 		checkboxWidgets[i] = CheckBox{
 			AssignTo: &permChecks[i],
 			Text:     p.code + " · " + p.label,
+			Font:     fieldFont,
 			Checked:  strings.Contains(result.Permissions, p.code),
 		}
 	}
@@ -432,27 +558,28 @@ func editFTPUserDialog(owner walk.Form, existing *config.FTPUser) (config.FTPUse
 		}
 	}
 
-	resultCode, err := Dialog{
-		AssignTo:      &dlg,
-		Title:         title,
-		MinSize:       Size{Width: 460, Height: 420},
-		Layout:        VBox{},
-		DefaultButton: &okBtn,
-		CancelButton:  &cancelBtn,
+	dialog := Dialog{
+		AssignTo:     &dlg,
+		Title:        title,
+		Font:         fieldFont,
+		MinSize:      Size{Width: 460, Height: 420},
+		Layout:       VBox{},
+		CancelButton: &cancelProxy,
 		Children: []Widget{
-			Label{Text: "사용자 이름"},
-			LineEdit{AssignTo: &usernameEdit, Text: result.Username},
-			Label{Text: pwHint},
-			LineEdit{AssignTo: &passwordEdit, PasswordMode: true},
-			Label{Text: "홈 디렉터리"},
-			pathField(&homeDirEdit, result.HomeDir, &dlg),
-			Label{Text: "권한"},
+			cancelProxyButton(&cancelProxy, func() { dlg.Cancel() }),
+			Label{Text: "사용자 이름", Font: fieldFont},
+			LineEdit{AssignTo: &usernameEdit, Text: result.Username, Font: fieldFont},
+			Label{Text: pwHint, Font: fieldFont},
+			LineEdit{AssignTo: &passwordEdit, PasswordMode: true, Font: fieldFont},
+			Label{Text: "홈 디렉터리", Font: fieldFont},
+			pathField(&homeDirEdit, result.HomeDir, &dlg, addBtn),
+			Label{Text: "권한", Font: fieldFont},
 			Composite{Layout: Grid{Columns: 2}, Children: checkboxWidgets},
 			Composite{
 				Layout: HBox{MarginsZero: true},
 				Children: []Widget{
-					PushButton{Text: "전체 권한", OnClicked: func() { setAllPerms(permsFull) }},
-					PushButton{Text: "읽기 전용", OnClicked: func() { setAllPerms(permsReadOnly) }},
+					addBtn("전체 권한", colorBtnNeutral, func() { setAllPerms(permsFull) }),
+					addBtn("읽기 전용", colorBtnNeutral, func() { setAllPerms(permsReadOnly) }),
 					HSpacer{},
 				},
 			},
@@ -461,7 +588,7 @@ func editFTPUserDialog(owner walk.Form, existing *config.FTPUser) (config.FTPUse
 				Layout: HBox{MarginsZero: true},
 				Children: []Widget{
 					HSpacer{},
-					PushButton{AssignTo: &okBtn, Text: "확인", OnClicked: func() {
+					addBtn("확인", colorAccent, func() {
 						if usernameEdit.Text() == "" {
 							walk.MsgBox(dlg, "오류", "사용자 이름을 입력하세요.", walk.MsgBoxIconError)
 							return
@@ -496,14 +623,22 @@ func editFTPUserDialog(owner walk.Form, existing *config.FTPUser) (config.FTPUse
 						result.HomeDir = homeDirEdit.Text()
 						result.Permissions = perms.String()
 						dlg.Accept()
-					}},
-					PushButton{AssignTo: &cancelBtn, Text: "취소", OnClicked: func() { dlg.Cancel() }},
+					}),
+					addBtn("취소", colorBtnNeutral, func() { dlg.Cancel() }),
 				},
 			},
 		},
-	}.Run(owner)
+	}
 
-	if err != nil || resultCode != walk.DlgCmdOK {
+	if err := dialog.Create(owner); err != nil {
+		return config.FTPUser{}, false
+	}
+	for _, wire := range *deferred {
+		wire()
+	}
+
+	resultCode := dlg.Run()
+	if resultCode != walk.DlgCmdOK {
 		return config.FTPUser{}, false
 	}
 	return result, true
